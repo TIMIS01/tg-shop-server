@@ -6,6 +6,7 @@ import sqlite3
 import secrets
 import string
 import logging
+import time
 from datetime import datetime, timedelta
 
 # ========== НАСТРОЙКА ==========
@@ -188,7 +189,7 @@ def send_message_to_admins(message, user_id=None):
             response = requests.post(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                 json=payload,
-                timeout=10
+                timeout=30
             )
             
             if response.status_code == 200:
@@ -206,7 +207,8 @@ def send_message_to_admins(message, user_id=None):
 def home():
     return jsonify({
         "status": "ok",
-        "message": "Telegram Shop Bot Webhook Server is running!"
+        "message": "Telegram Shop Bot Webhook Server is running!",
+        "time": datetime.now().isoformat()
     })
 
 @app.route('/api/test', methods=['GET'])
@@ -215,7 +217,8 @@ def test():
         "status": "ok",
         "message": "Webhook is working!",
         "bot_token_configured": bool(BOT_TOKEN),
-        "admin_count": len(ADMIN_IDS)
+        "admin_count": len(ADMIN_IDS),
+        "time": datetime.now().isoformat()
     })
 
 @app.route('/api/check-promo', methods=['POST'])
@@ -274,11 +277,13 @@ def create_promo():
         )
         
         if success:
+            logger.info(f"✅ Промокод создан: {code}")
             return jsonify({"status": "ok", "message": "Промокод создан"}), 200
         else:
             return jsonify({"status": "error", "message": "Промокод уже существует"}), 400
             
     except Exception as e:
+        logger.error(f"❌ Ошибка создания промокода: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/promos', methods=['GET'])
@@ -288,6 +293,7 @@ def get_promos():
         promos = get_all_promocodes()
         return jsonify({"status": "ok", "promocodes": promos}), 200
     except Exception as e:
+        logger.error(f"❌ Ошибка получения промокодов: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/delete-promo', methods=['POST'])
@@ -299,6 +305,7 @@ def delete_promo():
         delete_promocode(promo_id)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
+        logger.error(f"❌ Ошибка удаления промокода: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/webhook', methods=['POST'])
