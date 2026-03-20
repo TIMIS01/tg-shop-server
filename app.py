@@ -73,11 +73,6 @@ def init_products_db():
         created_by INTEGER
     )
     ''')
-    
-    # Добавляем тестовые товары, если таблица пустая
-    cursor.execute("SELECT COUNT(*) FROM products")
-    count = cursor.fetchone()[0]
-    
     conn.commit()
     conn.close()
     logger.info("✅ База данных товаров инициализирована")
@@ -344,6 +339,77 @@ def get_products():
         logger.error(f"❌ Ошибка получения товаров: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# ========== ЭНДПОИНТЫ ДЛЯ УПРАВЛЕНИЯ ТОВАРАМИ (ИЗ БОТА) ==========
+@app.route('/api/add-product', methods=['POST'])
+def add_product_endpoint():
+    """Создание товара (вызывается из бота)"""
+    try:
+        data = request.json
+        name = data.get('name')
+        price = data.get('price')
+        unit = data.get('unit', 'гр')
+        sizes = data.get('sizes', '1,2,3,4,5')
+        image_url = data.get('image_url')
+        created_by = data.get('created_by')
+        
+        if not name or not price:
+            return jsonify({"status": "error", "message": "Название и цена обязательны"}), 400
+        
+        product_id = add_product(name, price, unit, sizes, image_url, created_by)
+        
+        if product_id:
+            logger.info(f"✅ Товар добавлен: {name} (ID: {product_id})")
+            return jsonify({"status": "ok", "product_id": product_id}), 200
+        else:
+            return jsonify({"status": "error", "message": "Ошибка добавления"}), 400
+    except Exception as e:
+        logger.error(f"❌ Ошибка добавления товара: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/update-product', methods=['POST'])
+def update_product_endpoint():
+    """Обновление товара (вызывается из бота)"""
+    try:
+        data = request.json
+        product_id = data.get('product_id')
+        
+        if not product_id:
+            return jsonify({"status": "error", "message": "ID товара обязателен"}), 400
+        
+        update_product(
+            product_id,
+            name=data.get('name'),
+            price=data.get('price'),
+            unit=data.get('unit'),
+            sizes=data.get('sizes'),
+            image_url=data.get('image_url')
+        )
+        
+        logger.info(f"✅ Товар обновлен: ID {product_id}")
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления товара: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/delete-product', methods=['POST'])
+def delete_product_endpoint():
+    """Удаление товара (вызывается из бота)"""
+    try:
+        data = request.json
+        product_id = data.get('product_id')
+        
+        if not product_id:
+            return jsonify({"status": "error", "message": "ID товара обязателен"}), 400
+        
+        delete_product(product_id)
+        
+        logger.info(f"✅ Товар удален: ID {product_id}")
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления товара: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ========== ЭНДПОИНТЫ ДЛЯ ПРОМОКОДОВ ==========
 @app.route('/api/check-promo', methods=['POST'])
 def check_promo():
     """Проверка промокода"""
