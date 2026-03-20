@@ -6,7 +6,6 @@ import sqlite3
 import secrets
 import string
 import logging
-import time
 from datetime import datetime, timedelta
 
 # ========== НАСТРОЙКА ==========
@@ -53,6 +52,58 @@ def init_promocodes_db():
     logger.info("✅ База данных промокодов инициализирована")
 
 init_promocodes_db()
+
+# ========== БАЗА ДАННЫХ ТОВАРОВ ==========
+PRODUCTS_DB = 'products.db'
+
+def init_products_db():
+    """Инициализация базы данных товаров"""
+    conn = sqlite3.connect(PRODUCTS_DB)
+    cursor = conn.cursor()
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        price INTEGER NOT NULL,
+        unit TEXT DEFAULT 'гр',
+        sizes TEXT DEFAULT '1,2,3,4,5',
+        image_url TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT,
+        created_by INTEGER
+    )
+    ''')
+    
+    # Добавляем тестовые товары, если таблица пустая
+    cursor.execute("SELECT COUNT(*) FROM products")
+    count = cursor.fetchone()[0]
+    
+    if count == 0:
+        test_products = [
+            ("Шишки 🌰", 3000, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Shishka.png"),
+            ("Гашиш 🪴", 3600, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Gash.png"),
+            ("Амфетамин 💊", 2200, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/amf.png"),
+            ("Экстази 🍃", 1200, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Eks.png"),
+            ("Меф 🧂", 1700, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Mef.png"),
+            ("А-кристалл 💎", 5500, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Cry.png"),
+            ("Психотропные грибы 🍄", 500, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Mush.png"),
+            ("Лирика 💧", 8000, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Lyr.png")
+        ]
+        
+        for product in test_products:
+            cursor.execute('''
+            INSERT INTO products (name, price, unit, sizes, image_url, created_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (product[0], product[1], product[2], product[3], product[4], datetime.now().isoformat(), 1))
+        
+        conn.commit()
+        logger.info("✅ Добавлены тестовые товары")
+    
+    conn.commit()
+    conn.close()
+    logger.info("✅ База данных товаров инициализирована")
+
+init_products_db()
 
 # ========== ФУНКЦИИ ПРОМОКОДОВ ==========
 def generate_promocode(length=8):
@@ -152,6 +203,76 @@ def delete_promocode(promocode_id):
     conn.commit()
     conn.close()
 
+# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С ТОВАРАМИ ==========
+def get_all_products():
+    """Получить список всех активных товаров"""
+    conn = sqlite3.connect(PRODUCTS_DB)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, price, unit, sizes, image_url FROM products WHERE is_active = 1 ORDER BY id")
+    products = cursor.fetchall()
+    conn.close()
+    return products
+
+def get_product(product_id):
+    """Получить товар по ID"""
+    conn = sqlite3.connect(PRODUCTS_DB)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, price, unit, sizes, image_url FROM products WHERE id = ? AND is_active = 1", (product_id,))
+    product = cursor.fetchone()
+    conn.close()
+    return product
+
+def add_product(name, price, unit, sizes, image_url, created_by):
+    """Добавить новый товар"""
+    conn = sqlite3.connect(PRODUCTS_DB)
+    cursor = conn.cursor()
+    cursor.execute('''
+    INSERT INTO products (name, price, unit, sizes, image_url, created_at, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (name, price, unit, sizes, image_url, datetime.now().isoformat(), created_by))
+    product_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return product_id
+
+def update_product(product_id, name=None, price=None, unit=None, sizes=None, image_url=None):
+    """Обновить товар"""
+    conn = sqlite3.connect(PRODUCTS_DB)
+    cursor = conn.cursor()
+    
+    updates = []
+    params = []
+    if name is not None:
+        updates.append("name = ?")
+        params.append(name)
+    if price is not None:
+        updates.append("price = ?")
+        params.append(price)
+    if unit is not None:
+        updates.append("unit = ?")
+        params.append(unit)
+    if sizes is not None:
+        updates.append("sizes = ?")
+        params.append(sizes)
+    if image_url is not None:
+        updates.append("image_url = ?")
+        params.append(image_url)
+    
+    if updates:
+        query = f"UPDATE products SET {', '.join(updates)} WHERE id = ?"
+        params.append(product_id)
+        cursor.execute(query, params)
+        conn.commit()
+    conn.close()
+
+def delete_product(product_id):
+    """Удалить товар (деактивировать)"""
+    conn = sqlite3.connect(PRODUCTS_DB)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE products SET is_active = 0 WHERE id = ?", (product_id,))
+    conn.commit()
+    conn.close()
+
 # ========== КЛАВИАТУРА ДЛЯ АДМИНОВ ==========
 def get_admin_keyboard(user_id):
     """Создает клавиатуру с кнопками для администратора"""
@@ -211,40 +332,6 @@ def home():
         "time": datetime.now().isoformat()
     })
 
-
-@app.route('/api/products', methods=['GET'])
-def get_products():
-    """Получить список товаров для Mini App"""
-    try:
-        import sqlite3
-        import os
-        
-        # Путь к базе данных (на Render)
-        db_path = os.path.join(os.path.dirname(__file__), 'products.db')
-        
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, name, price, unit, sizes, image_url FROM products WHERE is_active = 1 ORDER BY id")
-        rows = cursor.fetchall()
-        conn.close()
-        
-        products = []
-        for row in rows:
-            sizes = [int(x.strip()) for x in row[4].split(',')] if row[4] else [1, 2, 3, 4, 5]
-            products.append({
-                'id': row[0],
-                'name': row[1],
-                'price': row[2],
-                'unit': row[3],
-                'sizes': sizes,
-                'image': row[5] or 'https://via.placeholder.com/300x200'
-            })
-        
-        return jsonify({"status": "ok", "products": products}), 200
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения товаров: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-        
 @app.route('/api/test', methods=['GET'])
 def test():
     return jsonify({
@@ -254,6 +341,29 @@ def test():
         "admin_count": len(ADMIN_IDS),
         "time": datetime.now().isoformat()
     })
+
+@app.route('/api/products', methods=['GET'])
+def get_products():
+    """Получить список товаров для Mini App"""
+    try:
+        products = get_all_products()
+        
+        result = []
+        for p in products:
+            sizes = [int(x.strip()) for x in p[4].split(',')] if p[4] else [1, 2, 3, 4, 5]
+            result.append({
+                'id': p[0],
+                'name': p[1],
+                'price': p[2],
+                'unit': p[3],
+                'sizes': sizes,
+                'image': p[5] or f'https://via.placeholder.com/300x200?text={p[1]}'
+            })
+        
+        return jsonify({"status": "ok", "products": result}), 200
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения товаров: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/check-promo', methods=['POST'])
 def check_promo():
