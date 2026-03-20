@@ -211,6 +211,40 @@ def home():
         "time": datetime.now().isoformat()
     })
 
+
+@app.route('/api/products', methods=['GET'])
+def get_products():
+    """Получить список товаров для Mini App"""
+    try:
+        import sqlite3
+        import os
+        
+        # Путь к базе данных (на Render)
+        db_path = os.path.join(os.path.dirname(__file__), 'products.db')
+        
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, price, unit, sizes, image_url FROM products WHERE is_active = 1 ORDER BY id")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        products = []
+        for row in rows:
+            sizes = [int(x.strip()) for x in row[4].split(',')] if row[4] else [1, 2, 3, 4, 5]
+            products.append({
+                'id': row[0],
+                'name': row[1],
+                'price': row[2],
+                'unit': row[3],
+                'sizes': sizes,
+                'image': row[5] or 'https://via.placeholder.com/300x200'
+            })
+        
+        return jsonify({"status": "ok", "products": products}), 200
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения товаров: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+        
 @app.route('/api/test', methods=['GET'])
 def test():
     return jsonify({
