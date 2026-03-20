@@ -78,27 +78,6 @@ def init_products_db():
     cursor.execute("SELECT COUNT(*) FROM products")
     count = cursor.fetchone()[0]
     
-    if count == 0:
-        test_products = [
-            ("Шишки 🌰", 3000, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Shishka.png"),
-            ("Гашиш 🪴", 3600, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Gash.png"),
-            ("Амфетамин 💊", 2200, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/amf.png"),
-            ("Экстази 🍃", 1200, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Eks.png"),
-            ("Меф 🧂", 1700, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Mef.png"),
-            ("А-кристалл 💎", 5500, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Cry.png"),
-            ("Психотропные грибы 🍄", 500, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Mush.png"),
-            ("Лирика 💧", 8000, "гр", "1,2,3,4,5", "https://timis01.github.io/miniappss/images/Lyr.png")
-        ]
-        
-        for product in test_products:
-            cursor.execute('''
-            INSERT INTO products (name, price, unit, sizes, image_url, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (product[0], product[1], product[2], product[3], product[4], datetime.now().isoformat(), 1))
-        
-        conn.commit()
-        logger.info("✅ Добавлены тестовые товары")
-    
     conn.commit()
     conn.close()
     logger.info("✅ База данных товаров инициализирована")
