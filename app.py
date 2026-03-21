@@ -1,12 +1,13 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
 import os
-import sqlite3
-import secrets
-import string
 import logging
 from datetime import datetime, timedelta
+from supabase import create_client, Client
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения
+load_dotenv()
 
 # ========== НАСТРОЙКА ==========
 logging.basicConfig(level=logging.INFO)
@@ -15,222 +16,169 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+# ========== SUPABASE КЛИЕНТ ==========
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    logger.error("❌ SUPABASE_URL или SUPABASE_KEY не заданы в переменных окружения!")
+    raise ValueError("Missing Supabase credentials")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 # ========== ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ==========
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8650034473:AAHOoD4BmYUBTrJCG1o2y8fMjabNIZN3hm8")
 ADMIN_IDS = [int(os.environ.get("ADMIN_ID", "8562390004"))]
 
-# ========== БАЗА ДАННЫХ ПРОМОКОДОВ ==========
-def init_promocodes_db():
-    """Инициализация базы данных промокодов"""
-    conn = sqlite3.connect('promocodes.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS promocodes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE,
-        discount_type TEXT,
-        discount_value INTEGER,
-        max_uses INTEGER DEFAULT 1,
-        used_count INTEGER DEFAULT 0,
-        expires_at TEXT,
-        created_by INTEGER,
-        created_at TEXT,
-        is_active INTEGER DEFAULT 1
-    )
-    ''')
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS promocode_uses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        promocode_id INTEGER,
-        user_id INTEGER,
-        used_at TEXT,
-        order_amount INTEGER
-    )
-    ''')
-    conn.commit()
-    conn.close()
-    logger.info("✅ База данных промокодов инициализирована")
-
-init_promocodes_db()
-
-# ========== БАЗА ДАННЫХ ТОВАРОВ ==========
-PRODUCTS_DB = 'products.db'
-
-def init_products_db():
-    """Инициализация базы данных товаров"""
-    conn = sqlite3.connect(PRODUCTS_DB)
-    cursor = conn.cursor()
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS products (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        price INTEGER NOT NULL,
-        unit TEXT DEFAULT 'гр',
-        image_url TEXT,
-        is_active INTEGER DEFAULT 1,
-        created_at TEXT,
-        created_by INTEGER
-    )
-    ''')
-    conn.commit()
-    conn.close()
-    logger.info("✅ База данных товаров инициализирована")
-
-init_products_db()
-
-# ========== ФУНКЦИИ ПРОМОКОДОВ ==========
-def generate_promocode(length=8):
-    alphabet = string.ascii_uppercase + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
-
-def create_promocode(code, discount_type, discount_value, max_uses=1, expires_days=30, created_by=None):
-    conn = sqlite3.connect('promocodes.db')
-    cursor = conn.cursor()
-    
-    expires_at = (datetime.now() + timedelta(days=expires_days)).isoformat()
-    
-    try:
-        cursor.execute('''
-        INSERT INTO promocodes (code, discount_type, discount_value, max_uses, expires_at, created_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (code.upper(), discount_type, discount_value, max_uses, expires_at, created_by, datetime.now().isoformat()))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
-def get_promocode(code):
-    conn = sqlite3.connect('promocodes.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-    SELECT id, code, discount_type, discount_value, max_uses, used_count, expires_at, is_active
-    FROM promocodes WHERE code = ? AND is_active = 1
-    ''', (code.upper(),))
-    result = cursor.fetchone()
-    conn.close()
-    
-    if result:
-        if datetime.now().isoformat() > result[6]:
-            return None
-        if result[4] <= result[5]:
-            return None
-        return {
-            'id': result[0],
-            'code': result[1],
-            'type': result[2],
-            'value': result[3],
-            'max_uses': result[4],
-            'used_count': result[5],
-            'expires_at': result[6]
-        }
-    return None
-
-def use_promocode(promocode_id, user_id, order_amount):
-    conn = sqlite3.connect('promocodes.db')
-    cursor = conn.cursor()
-    cursor.execute('UPDATE promocodes SET used_count = used_count + 1 WHERE id = ?', (promocode_id,))
-    cursor.execute('''
-    INSERT INTO promocode_uses (promocode_id, user_id, used_at, order_amount)
-    VALUES (?, ?, ?, ?)
-    ''', (promocode_id, user_id, datetime.now().isoformat(), order_amount))
-    conn.commit()
-    conn.close()
-
-def get_all_promocodes():
-    conn = sqlite3.connect('promocodes.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-    SELECT id, code, discount_type, discount_value, max_uses, used_count, expires_at, is_active, created_at
-    FROM promocodes ORDER BY created_at DESC
-    ''')
-    results = cursor.fetchall()
-    conn.close()
-    
-    promocodes = []
-    for r in results:
-        promocodes.append({
-            'id': r[0],
-            'code': r[1],
-            'type': r[2],
-            'value': r[3],
-            'max_uses': r[4],
-            'used_count': r[5],
-            'expires_at': r[6],
-            'is_active': r[7],
-            'created_at': r[8]
-        })
-    return promocodes
-
-def delete_promocode(promocode_id):
-    conn = sqlite3.connect('promocodes.db')
-    cursor = conn.cursor()
-    cursor.execute('UPDATE promocodes SET is_active = 0 WHERE id = ?', (promocode_id,))
-    conn.commit()
-    conn.close()
-
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С ТОВАРАМИ ==========
 def get_all_products():
-    conn = sqlite3.connect(PRODUCTS_DB)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, price, unit, image_url FROM products WHERE is_active = 1 ORDER BY id")
-    products = cursor.fetchall()
-    conn.close()
-    return products
+    """Получить список всех активных товаров"""
+    try:
+        response = supabase.table('products').select('*').eq('is_active', True).execute()
+        return response.data
+    except Exception as e:
+        logger.error(f"Ошибка получения товаров: {e}")
+        return []
 
 def get_product(product_id):
-    conn = sqlite3.connect(PRODUCTS_DB)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, price, unit, image_url FROM products WHERE id = ? AND is_active = 1", (product_id,))
-    product = cursor.fetchone()
-    conn.close()
-    return product
+    """Получить товар по ID"""
+    try:
+        response = supabase.table('products').select('*').eq('id', product_id).eq('is_active', True).execute()
+        if response.data:
+            return response.data[0]
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка получения товара {product_id}: {e}")
+        return None
 
 def add_product(name, price, unit, image_url, created_by):
-    conn = sqlite3.connect(PRODUCTS_DB)
-    cursor = conn.cursor()
-    cursor.execute('''
-    INSERT INTO products (name, price, unit, image_url, created_at, created_by)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ''', (name, price, unit, image_url, datetime.now().isoformat(), created_by))
-    product_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return product_id
+    """Добавить новый товар"""
+    try:
+        response = supabase.table('products').insert({
+            'name': name,
+            'price': price,
+            'unit': unit,
+            'image_url': image_url,
+            'created_by': created_by,
+            'created_at': datetime.now().isoformat()
+        }).execute()
+        return response.data[0]['id'] if response.data else None
+    except Exception as e:
+        logger.error(f"Ошибка добавления товара: {e}")
+        return None
 
 def update_product(product_id, name=None, price=None, unit=None, image_url=None):
-    conn = sqlite3.connect(PRODUCTS_DB)
-    cursor = conn.cursor()
-    
-    updates = []
-    params = []
-    if name is not None:
-        updates.append("name = ?")
-        params.append(name)
-    if price is not None:
-        updates.append("price = ?")
-        params.append(price)
-    if unit is not None:
-        updates.append("unit = ?")
-        params.append(unit)
-    if image_url is not None:
-        updates.append("image_url = ?")
-        params.append(image_url)
-    
-    if updates:
-        query = f"UPDATE products SET {', '.join(updates)} WHERE id = ?"
-        params.append(product_id)
-        cursor.execute(query, params)
-        conn.commit()
-    conn.close()
+    """Обновить товар"""
+    try:
+        updates = {}
+        if name is not None:
+            updates['name'] = name
+        if price is not None:
+            updates['price'] = price
+        if unit is not None:
+            updates['unit'] = unit
+        if image_url is not None:
+            updates['image_url'] = image_url
+        
+        if updates:
+            supabase.table('products').update(updates).eq('id', product_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка обновления товара {product_id}: {e}")
+        return False
 
 def delete_product(product_id):
-    conn = sqlite3.connect(PRODUCTS_DB)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE products SET is_active = 0 WHERE id = ?", (product_id,))
-    conn.commit()
-    conn.close()
+    """Удалить товар (деактивировать)"""
+    try:
+        supabase.table('products').update({'is_active': False}).eq('id', product_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка удаления товара {product_id}: {e}")
+        return False
+
+# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С ПРОМОКОДАМИ ==========
+def get_promocode(code):
+    """Получить промокод по коду"""
+    try:
+        response = supabase.table('promocodes').select('*').eq('code', code.upper()).eq('is_active', True).execute()
+        if not response.data:
+            return None
+        
+        promo = response.data[0]
+        # Проверка срока действия
+        if promo['expires_at'] and datetime.now().isoformat() > promo['expires_at']:
+            return None
+        # Проверка лимита использований
+        if promo['max_uses'] <= promo['used_count']:
+            return None
+        
+        return {
+            'id': promo['id'],
+            'code': promo['code'],
+            'type': promo['discount_type'],
+            'value': promo['discount_value'],
+            'max_uses': promo['max_uses'],
+            'used_count': promo['used_count'],
+            'expires_at': promo['expires_at']
+        }
+    except Exception as e:
+        logger.error(f"Ошибка получения промокода: {e}")
+        return None
+
+def use_promocode(promocode_id, user_id, order_amount):
+    """Увеличить счетчик использований промокода"""
+    try:
+        # Получаем текущий used_count
+        response = supabase.table('promocodes').select('used_count').eq('id', promocode_id).execute()
+        if response.data:
+            new_count = response.data[0]['used_count'] + 1
+            supabase.table('promocodes').update({'used_count': new_count}).eq('id', promocode_id).execute()
+        
+        # Записываем использование
+        supabase.table('promocode_uses').insert({
+            'promocode_id': promocode_id,
+            'user_id': user_id,
+            'order_amount': order_amount
+        }).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка использования промокода: {e}")
+        return False
+
+def create_promocode(code, discount_type, discount_value, max_uses, expires_days, created_by):
+    """Создать новый промокод"""
+    try:
+        expires_at = (datetime.now() + timedelta(days=expires_days)).isoformat()
+        response = supabase.table('promocodes').insert({
+            'code': code.upper(),
+            'discount_type': discount_type,
+            'discount_value': discount_value,
+            'max_uses': max_uses,
+            'expires_at': expires_at,
+            'created_by': created_by
+        }).execute()
+        return response.data is not None
+    except Exception as e:
+        logger.error(f"Ошибка создания промокода: {e}")
+        return False
+
+def get_all_promocodes():
+    """Получить все промокоды"""
+    try:
+        response = supabase.table('promocodes').select('*').order('created_at', desc=True).execute()
+        return response.data
+    except Exception as e:
+        logger.error(f"Ошибка получения промокодов: {e}")
+        return []
+
+def delete_promocode(promocode_id):
+    """Деактивировать промокод"""
+    try:
+        supabase.table('promocodes').update({'is_active': False}).eq('id', promocode_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка удаления промокода: {e}")
+        return False
 
 # ========== КЛАВИАТУРА ДЛЯ АДМИНОВ ==========
 def get_admin_keyboard(user_id):
@@ -248,6 +196,7 @@ def get_admin_keyboard(user_id):
 
 # ========== ОТПРАВКА СООБЩЕНИЙ АДМИНАМ ==========
 def send_message_to_admins(message, user_id=None):
+    import requests
     success_count = 0
     
     reply_markup = None
@@ -272,11 +221,8 @@ def send_message_to_admins(message, user_id=None):
             
             if response.status_code == 200:
                 success_count += 1
-                logger.info(f"✅ Сообщение отправлено админу {admin_id}")
-            else:
-                logger.error(f"❌ Ошибка отправки админу {admin_id}: {response.text}")
         except Exception as e:
-            logger.error(f"❌ Ошибка при отправке админу {admin_id}: {e}")
+            logger.error(f"Ошибка отправки админу {admin_id}: {e}")
     
     return success_count
 
@@ -296,27 +242,29 @@ def test():
         "message": "Webhook is working!",
         "bot_token_configured": bool(BOT_TOKEN),
         "admin_count": len(ADMIN_IDS),
+        "supabase_connected": bool(SUPABASE_URL and SUPABASE_KEY),
         "time": datetime.now().isoformat()
     })
 
 @app.route('/api/products', methods=['GET'])
 def get_products():
+    """Получить список товаров для Mini App"""
     try:
         products = get_all_products()
         
         result = []
         for p in products:
             result.append({
-                'id': p[0],
-                'name': p[1],
-                'price': p[2],
-                'unit': p[3],
-                'image': p[4] or f'https://via.placeholder.com/300x200?text={p[1]}'
+                'id': p['id'],
+                'name': p['name'],
+                'price': p['price'],
+                'unit': p.get('unit', 'гр'),
+                'image': p.get('image_url') or f'https://via.placeholder.com/300x200?text={p["name"]}'
             })
         
         return jsonify({"status": "ok", "products": result}), 200
     except Exception as e:
-        logger.error(f"❌ Ошибка получения товаров: {e}")
+        logger.error(f"Ошибка получения товаров: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/add-product', methods=['POST'])
@@ -340,7 +288,7 @@ def add_product_endpoint():
         else:
             return jsonify({"status": "error", "message": "Ошибка добавления"}), 400
     except Exception as e:
-        logger.error(f"❌ Ошибка добавления товара: {e}")
+        logger.error(f"Ошибка добавления товара: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/update-product', methods=['POST'])
@@ -363,7 +311,7 @@ def update_product_endpoint():
         logger.info(f"✅ Товар обновлен: ID {product_id}")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        logger.error(f"❌ Ошибка обновления товара: {e}")
+        logger.error(f"Ошибка обновления товара: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/delete-product', methods=['POST'])
@@ -380,7 +328,7 @@ def delete_product_endpoint():
         logger.info(f"✅ Товар удален: ID {product_id}")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        logger.error(f"❌ Ошибка удаления товара: {e}")
+        logger.error(f"Ошибка удаления товара: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/check-promo', methods=['POST'])
@@ -388,7 +336,6 @@ def check_promo():
     try:
         data = request.json
         code = data.get('code', '').upper()
-        promo_type = data.get('promoType', 'discount')  # 'discount' или 'bonus'
         
         promo = get_promocode(code)
         
@@ -403,18 +350,14 @@ def check_promo():
             "promo": {
                 "code": promo['code'],
                 "type": promo['type'],
-                "value": promo['value'],
-                "promo_type": promo_type
+                "value": promo['value']
             },
             "message": "Промокод применен!"
         }), 200
         
     except Exception as e:
-        logger.error(f"❌ Ошибка проверки промокода: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+        logger.error(f"Ошибка проверки промокода: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/create-promo', methods=['POST'])
 def create_promo():
@@ -427,14 +370,7 @@ def create_promo():
         expires_days = data.get('expires_days', 30)
         created_by = data.get('created_by')
         
-        success = create_promocode(
-            code=code,
-            discount_type=discount_type,
-            discount_value=discount_value,
-            max_uses=max_uses,
-            expires_days=expires_days,
-            created_by=created_by
-        )
+        success = create_promocode(code, discount_type, discount_value, max_uses, expires_days, created_by)
         
         if success:
             logger.info(f"✅ Промокод создан: {code}")
@@ -443,7 +379,7 @@ def create_promo():
             return jsonify({"status": "error", "message": "Промокод уже существует"}), 400
             
     except Exception as e:
-        logger.error(f"❌ Ошибка создания промокода: {e}")
+        logger.error(f"Ошибка создания промокода: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/promos', methods=['GET'])
@@ -452,7 +388,7 @@ def get_promos():
         promos = get_all_promocodes()
         return jsonify({"status": "ok", "promocodes": promos}), 200
     except Exception as e:
-        logger.error(f"❌ Ошибка получения промокодов: {e}")
+        logger.error(f"Ошибка получения промокодов: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/delete-promo', methods=['POST'])
@@ -463,37 +399,50 @@ def delete_promo():
         delete_promocode(promo_id)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        logger.error(f"❌ Ошибка удаления промокода: {e}")
+        logger.error(f"Ошибка удаления промокода: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
-    """Основной эндпоинт для приема данных из Mini App"""
     try:
         data = request.json
         logger.info(f"📥 Получены данные: {data}")
         
         action = data.get('action')
         
-        # Получаем данные пользователя
         user_id = data.get('userId')
         username = data.get('username')
         first_name = data.get('firstName')
         last_name = data.get('lastName')
         full_name = data.get('fullName') or f"{first_name or ''} {last_name or ''}".strip() or "Пользователь"
         
-        # Формируем отображаемое имя
         display_name = full_name
         if username:
             display_name = f"{full_name} (@{username})"
         elif user_id:
             display_name = f"{full_name} (ID: {user_id})"
         
+        # Сохраняем сообщение в базу
+        if action in ['order', 'contact_admin']:
+            supabase.table('messages').insert({
+                'user_id': user_id,
+                'username': username,
+                'message_text': data.get('message', ''),
+                'message_type': action
+            }).execute()
+        
         if action == 'order':
-            # Получаем информацию о промокоде
-            promo_info = ""
-            promo_bonus_info = ""
+            # Сохраняем заказ
+            supabase.table('orders').insert({
+                'user_id': user_id,
+                'username': username,
+                'product_name': data.get('productName'),
+                'quantity': data.get('quantity', 1),
+                'city': data.get('city'),
+                'total_price': data.get('finalPrice', data.get('totalPrice'))
+            }).execute()
             
+            promo_info = ""
             if data.get('promocode'):
                 promo = data['promocode']
                 promo_type = data.get('promoType', 'discount')
@@ -503,24 +452,16 @@ def webhook():
                 else:
                     promo_info = f"\n🎫 Промокод: {promo['code']} (+{promo['value']}% бонус к количеству)"
                     if data.get('finalQuantity'):
-                        promo_bonus_info = f"\n🎁 Бонус: {data.get('quantity', 1)} {data.get('unit', 'гр')} → {data.get('finalQuantity', 0):.2f} {data.get('unit', 'гр')}"
+                        promo_info += f"\n🎁 Бонус: {data.get('quantity', 1)} {data.get('unit', 'гр')} → {data.get('finalQuantity', 0):.2f} {data.get('unit', 'гр')}"
                 
-                # Записываем использование промокода
                 promo_data = get_promocode(promo['code'])
                 if promo_data:
                     use_promocode(promo_data['id'], user_id, data.get('finalPrice', data.get('totalPrice')))
             
-            # Формируем отображение количества
             quantity_display = f"{data.get('quantity', 1)} {data.get('unit', 'гр')}"
             if data.get('finalQuantity') and data.get('finalQuantity') != data.get('quantity'):
-                quantity_display = f"{data.get('quantity', 1)} {data.get('unit', 'гр')} → {data.get('finalQuantity', 0):.2f} {data.get('unit', 'гр')} (с бонусом)"
+                quantity_display = f"{data.get('quantity', 1)} {data.get('unit', 'гр')} → {data.get('finalQuantity', 0):.2f} {data.get('unit', 'гр')}"
             
-            # Формируем отображение цены
-            price_display = f"{data.get('pricePerUnit', 0)} руб / {data.get('unit', 'гр')}"
-            if data.get('finalPricePerUnit') and data.get('finalPricePerUnit') != data.get('pricePerUnit'):
-                price_display = f"{data.get('pricePerUnit', 0)} руб → {data.get('finalPricePerUnit', 0)} руб (со скидкой)"
-            
-            # Формируем сообщение для заказа
             message = (
                 f"🛍 <b>НОВЫЙ ЗАКАЗ!</b>\n\n"
                 f"👤 <b>Покупатель:</b> {display_name}\n"
@@ -528,22 +469,19 @@ def webhook():
                 f"🏙️ <b>Город:</b> {data.get('city', 'не указан')}\n"
                 f"📦 <b>Товар:</b> {data.get('productName', 'неизвестно')}\n"
                 f"📊 <b>Количество:</b> {quantity_display}\n"
-                f"💰 <b>Цена:</b> {price_display}\n"
+                f"💰 <b>Цена:</b> {data.get('pricePerUnit', 0)} руб / {data.get('unit', 'гр')}\n"
                 f"💵 <b>Сумма:</b> {data.get('totalPrice', 0)} руб.\n"
-                f"{promo_info}"
-                f"{promo_bonus_info}\n"
+                f"{promo_info}\n"
                 f"💵 <b>Итого к оплате:</b> {data.get('finalPrice', data.get('totalPrice', 0))} руб.\n"
                 f"📅 <b>Время:</b> {data.get('timestamp', datetime.now().isoformat())}"
             )
             
-            # Отправляем админам с кнопками
             if user_id:
                 send_message_to_admins(message, user_id)
             else:
                 send_message_to_admins(message)
             
         elif action == 'contact_admin':
-            # Формируем сообщение для запроса связи
             message = (
                 f"📞 <b>ЗАПРОС СВЯЗИ!</b>\n\n"
                 f"👤 <b>Пользователь:</b> {display_name}\n"
@@ -553,7 +491,6 @@ def webhook():
                 f"💬 Сообщение: {data.get('message', 'Пользователь хочет связаться с администратором')}"
             )
             
-            # Отправляем админам с кнопками
             if user_id:
                 send_message_to_admins(message, user_id)
             else:
@@ -569,7 +506,7 @@ def webhook():
         }), 200
         
     except Exception as e:
-        logger.error(f"❌ Ошибка обработки запроса: {e}")
+        logger.error(f"Ошибка обработки запроса: {e}")
         return jsonify({
             "status": "error",
             "message": str(e)
