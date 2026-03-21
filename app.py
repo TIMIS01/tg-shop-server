@@ -388,6 +388,7 @@ def check_promo():
     try:
         data = request.json
         code = data.get('code', '').upper()
+        promo_type = data.get('promoType', 'discount')  # 'discount' или 'bonus'
         
         promo = get_promocode(code)
         
@@ -402,7 +403,8 @@ def check_promo():
             "promo": {
                 "code": promo['code'],
                 "type": promo['type'],
-                "value": promo['value']
+                "value": promo['value'],
+                "promo_type": promo_type
             },
             "message": "Промокод применен!"
         }), 200
@@ -466,18 +468,21 @@ def delete_promo():
 
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
+    """Основной эндпоинт для приема данных из Mini App"""
     try:
         data = request.json
         logger.info(f"📥 Получены данные: {data}")
         
         action = data.get('action')
         
+        # Получаем данные пользователя
         user_id = data.get('userId')
         username = data.get('username')
         first_name = data.get('firstName')
         last_name = data.get('lastName')
         full_name = data.get('fullName') or f"{first_name or ''} {last_name or ''}".strip() or "Пользователь"
         
+        # Формируем отображаемое имя
         display_name = full_name
         if username:
             display_name = f"{full_name} (@{username})"
@@ -485,35 +490,60 @@ def webhook():
             display_name = f"{full_name} (ID: {user_id})"
         
         if action == 'order':
+            # Получаем информацию о промокоде
             promo_info = ""
+            promo_bonus_info = ""
+            
             if data.get('promocode'):
                 promo = data['promocode']
-                promo_info = f"\n🎫 Промокод: {promo['code']} ({promo['value']}{'%' if promo['type'] == 'percent' else ' руб'})"
+                promo_type = data.get('promoType', 'discount')
                 
+                if promo_type == 'discount':
+                    promo_info = f"\n🎫 Промокод: {promo['code']} (скидка {promo['value']}%)"
+                else:
+                    promo_info = f"\n🎫 Промокод: {promo['code']} (+{promo['value']}% бонус к количеству)"
+                    if data.get('finalQuantity'):
+                        promo_bonus_info = f"\n🎁 Бонус: {data.get('quantity', 1)} {data.get('unit', 'гр')} → {data.get('finalQuantity', 0):.2f} {data.get('unit', 'гр')}"
+                
+                # Записываем использование промокода
                 promo_data = get_promocode(promo['code'])
                 if promo_data:
                     use_promocode(promo_data['id'], user_id, data.get('finalPrice', data.get('totalPrice')))
             
+            # Формируем отображение количества
+            quantity_display = f"{data.get('quantity', 1)} {data.get('unit', 'гр')}"
+            if data.get('finalQuantity') and data.get('finalQuantity') != data.get('quantity'):
+                quantity_display = f"{data.get('quantity', 1)} {data.get('unit', 'гр')} → {data.get('finalQuantity', 0):.2f} {data.get('unit', 'гр')} (с бонусом)"
+            
+            # Формируем отображение цены
+            price_display = f"{data.get('pricePerUnit', 0)} руб / {data.get('unit', 'гр')}"
+            if data.get('finalPricePerUnit') and data.get('finalPricePerUnit') != data.get('pricePerUnit'):
+                price_display = f"{data.get('pricePerUnit', 0)} руб → {data.get('finalPricePerUnit', 0)} руб (со скидкой)"
+            
+            # Формируем сообщение для заказа
             message = (
                 f"🛍 <b>НОВЫЙ ЗАКАЗ!</b>\n\n"
                 f"👤 <b>Покупатель:</b> {display_name}\n"
                 f"🆔 <b>ID:</b> <code>{user_id or 'не указан'}</code>\n"
                 f"🏙️ <b>Город:</b> {data.get('city', 'не указан')}\n"
                 f"📦 <b>Товар:</b> {data.get('productName', 'неизвестно')}\n"
-                f"📊 <b>Количество:</b> {data.get('quantity', 1)} {data.get('unit', 'гр')}\n"
-                f"💰 <b>Цена за {data.get('unit', 'гр')}:</b> {data.get('pricePerUnit', 0)} руб.\n"
+                f"📊 <b>Количество:</b> {quantity_display}\n"
+                f"💰 <b>Цена:</b> {price_display}\n"
                 f"💵 <b>Сумма:</b> {data.get('totalPrice', 0)} руб.\n"
-                f"{promo_info}\n"
-                f"💵 <b>Итого:</b> {data.get('finalPrice', data.get('totalPrice', 0))} руб.\n"
+                f"{promo_info}"
+                f"{promo_bonus_info}\n"
+                f"💵 <b>Итого к оплате:</b> {data.get('finalPrice', data.get('totalPrice', 0))} руб.\n"
                 f"📅 <b>Время:</b> {data.get('timestamp', datetime.now().isoformat())}"
             )
             
+            # Отправляем админам с кнопками
             if user_id:
                 send_message_to_admins(message, user_id)
             else:
                 send_message_to_admins(message)
             
         elif action == 'contact_admin':
+            # Формируем сообщение для запроса связи
             message = (
                 f"📞 <b>ЗАПРОС СВЯЗИ!</b>\n\n"
                 f"👤 <b>Пользователь:</b> {display_name}\n"
@@ -523,6 +553,7 @@ def webhook():
                 f"💬 Сообщение: {data.get('message', 'Пользователь хочет связаться с администратором')}"
             )
             
+            # Отправляем админам с кнопками
             if user_id:
                 send_message_to_admins(message, user_id)
             else:
