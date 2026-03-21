@@ -27,7 +27,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ========== ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ==========
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8650034473:AAHOoD4BmYUBTrJCG1o2y8fMjabNIZN3hm8")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8758750734:AAHw9HokfvqB3ltT6M9g289zfcNut-9TVSs")
 ADMIN_IDS = [int(os.environ.get("ADMIN_ID", "8562390004"))]
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С ТОВАРАМИ ==========
