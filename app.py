@@ -66,7 +66,6 @@ def init_products_db():
         name TEXT NOT NULL,
         price INTEGER NOT NULL,
         unit TEXT DEFAULT 'гр',
-        sizes TEXT DEFAULT '1,2,3,4,5',
         image_url TEXT,
         is_active INTEGER DEFAULT 1,
         created_at TEXT,
@@ -81,12 +80,10 @@ init_products_db()
 
 # ========== ФУНКЦИИ ПРОМОКОДОВ ==========
 def generate_promocode(length=8):
-    """Генерирует случайный промокод"""
     alphabet = string.ascii_uppercase + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 def create_promocode(code, discount_type, discount_value, max_uses=1, expires_days=30, created_by=None):
-    """Создает новый промокод"""
     conn = sqlite3.connect('promocodes.db')
     cursor = conn.cursor()
     
@@ -105,7 +102,6 @@ def create_promocode(code, discount_type, discount_value, max_uses=1, expires_da
         conn.close()
 
 def get_promocode(code):
-    """Получает информацию о промокоде"""
     conn = sqlite3.connect('promocodes.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -132,7 +128,6 @@ def get_promocode(code):
     return None
 
 def use_promocode(promocode_id, user_id, order_amount):
-    """Использует промокод"""
     conn = sqlite3.connect('promocodes.db')
     cursor = conn.cursor()
     cursor.execute('UPDATE promocodes SET used_count = used_count + 1 WHERE id = ?', (promocode_id,))
@@ -144,7 +139,6 @@ def use_promocode(promocode_id, user_id, order_amount):
     conn.close()
 
 def get_all_promocodes():
-    """Получает список всех промокодов"""
     conn = sqlite3.connect('promocodes.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -170,7 +164,6 @@ def get_all_promocodes():
     return promocodes
 
 def delete_promocode(promocode_id):
-    """Деактивирует промокод"""
     conn = sqlite3.connect('promocodes.db')
     cursor = conn.cursor()
     cursor.execute('UPDATE promocodes SET is_active = 0 WHERE id = ?', (promocode_id,))
@@ -179,38 +172,34 @@ def delete_promocode(promocode_id):
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С ТОВАРАМИ ==========
 def get_all_products():
-    """Получить список всех активных товаров"""
     conn = sqlite3.connect(PRODUCTS_DB)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, price, unit, sizes, image_url FROM products WHERE is_active = 1 ORDER BY id")
+    cursor.execute("SELECT id, name, price, unit, image_url FROM products WHERE is_active = 1 ORDER BY id")
     products = cursor.fetchall()
     conn.close()
     return products
 
 def get_product(product_id):
-    """Получить товар по ID"""
     conn = sqlite3.connect(PRODUCTS_DB)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, price, unit, sizes, image_url FROM products WHERE id = ? AND is_active = 1", (product_id,))
+    cursor.execute("SELECT id, name, price, unit, image_url FROM products WHERE id = ? AND is_active = 1", (product_id,))
     product = cursor.fetchone()
     conn.close()
     return product
 
-def add_product(name, price, unit, sizes, image_url, created_by):
-    """Добавить новый товар"""
+def add_product(name, price, unit, image_url, created_by):
     conn = sqlite3.connect(PRODUCTS_DB)
     cursor = conn.cursor()
     cursor.execute('''
-    INSERT INTO products (name, price, unit, sizes, image_url, created_at, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (name, price, unit, sizes, image_url, datetime.now().isoformat(), created_by))
+    INSERT INTO products (name, price, unit, image_url, created_at, created_by)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ''', (name, price, unit, image_url, datetime.now().isoformat(), created_by))
     product_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return product_id
 
-def update_product(product_id, name=None, price=None, unit=None, sizes=None, image_url=None):
-    """Обновить товар"""
+def update_product(product_id, name=None, price=None, unit=None, image_url=None):
     conn = sqlite3.connect(PRODUCTS_DB)
     cursor = conn.cursor()
     
@@ -225,9 +214,6 @@ def update_product(product_id, name=None, price=None, unit=None, sizes=None, ima
     if unit is not None:
         updates.append("unit = ?")
         params.append(unit)
-    if sizes is not None:
-        updates.append("sizes = ?")
-        params.append(sizes)
     if image_url is not None:
         updates.append("image_url = ?")
         params.append(image_url)
@@ -240,7 +226,6 @@ def update_product(product_id, name=None, price=None, unit=None, sizes=None, ima
     conn.close()
 
 def delete_product(product_id):
-    """Удалить товар (деактивировать)"""
     conn = sqlite3.connect(PRODUCTS_DB)
     cursor = conn.cursor()
     cursor.execute("UPDATE products SET is_active = 0 WHERE id = ?", (product_id,))
@@ -249,7 +234,6 @@ def delete_product(product_id):
 
 # ========== КЛАВИАТУРА ДЛЯ АДМИНОВ ==========
 def get_admin_keyboard(user_id):
-    """Создает клавиатуру с кнопками для администратора"""
     return {
         "inline_keyboard": [
             [
@@ -264,7 +248,6 @@ def get_admin_keyboard(user_id):
 
 # ========== ОТПРАВКА СООБЩЕНИЙ АДМИНАМ ==========
 def send_message_to_admins(message, user_id=None):
-    """Отправляет сообщение всем админам с кнопками"""
     success_count = 0
     
     reply_markup = None
@@ -318,20 +301,17 @@ def test():
 
 @app.route('/api/products', methods=['GET'])
 def get_products():
-    """Получить список товаров для Mini App"""
     try:
         products = get_all_products()
         
         result = []
         for p in products:
-            sizes = [int(x.strip()) for x in p[4].split(',')] if p[4] else [1, 2, 3, 4, 5]
             result.append({
                 'id': p[0],
                 'name': p[1],
                 'price': p[2],
                 'unit': p[3],
-                'sizes': sizes,
-                'image': p[5] or f'https://via.placeholder.com/300x200?text={p[1]}'
+                'image': p[4] or f'https://via.placeholder.com/300x200?text={p[1]}'
             })
         
         return jsonify({"status": "ok", "products": result}), 200
@@ -339,23 +319,20 @@ def get_products():
         logger.error(f"❌ Ошибка получения товаров: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ========== ЭНДПОИНТЫ ДЛЯ УПРАВЛЕНИЯ ТОВАРАМИ (ИЗ БОТА) ==========
 @app.route('/api/add-product', methods=['POST'])
 def add_product_endpoint():
-    """Создание товара (вызывается из бота)"""
     try:
         data = request.json
         name = data.get('name')
         price = data.get('price')
         unit = data.get('unit', 'гр')
-        sizes = data.get('sizes', '1,2,3,4,5')
         image_url = data.get('image_url')
         created_by = data.get('created_by')
         
         if not name or not price:
             return jsonify({"status": "error", "message": "Название и цена обязательны"}), 400
         
-        product_id = add_product(name, price, unit, sizes, image_url, created_by)
+        product_id = add_product(name, price, unit, image_url, created_by)
         
         if product_id:
             logger.info(f"✅ Товар добавлен: {name} (ID: {product_id})")
@@ -368,7 +345,6 @@ def add_product_endpoint():
 
 @app.route('/api/update-product', methods=['POST'])
 def update_product_endpoint():
-    """Обновление товара (вызывается из бота)"""
     try:
         data = request.json
         product_id = data.get('product_id')
@@ -381,7 +357,6 @@ def update_product_endpoint():
             name=data.get('name'),
             price=data.get('price'),
             unit=data.get('unit'),
-            sizes=data.get('sizes'),
             image_url=data.get('image_url')
         )
         
@@ -393,7 +368,6 @@ def update_product_endpoint():
 
 @app.route('/api/delete-product', methods=['POST'])
 def delete_product_endpoint():
-    """Удаление товара (вызывается из бота)"""
     try:
         data = request.json
         product_id = data.get('product_id')
@@ -409,15 +383,11 @@ def delete_product_endpoint():
         logger.error(f"❌ Ошибка удаления товара: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ========== ЭНДПОИНТЫ ДЛЯ ПРОМОКОДОВ ==========
 @app.route('/api/check-promo', methods=['POST'])
 def check_promo():
-    """Проверка промокода"""
     try:
         data = request.json
         code = data.get('code', '').upper()
-        user_id = data.get('userId')
-        order_amount = data.get('orderAmount', 0)
         
         promo = get_promocode(code)
         
@@ -446,7 +416,6 @@ def check_promo():
 
 @app.route('/api/create-promo', methods=['POST'])
 def create_promo():
-    """Создание промокода (вызывается из бота)"""
     try:
         data = request.json
         code = data.get('code')
@@ -477,7 +446,6 @@ def create_promo():
 
 @app.route('/api/promos', methods=['GET'])
 def get_promos():
-    """Получить список всех промокодов"""
     try:
         promos = get_all_promocodes()
         return jsonify({"status": "ok", "promocodes": promos}), 200
@@ -487,7 +455,6 @@ def get_promos():
 
 @app.route('/api/delete-promo', methods=['POST'])
 def delete_promo():
-    """Удалить промокод"""
     try:
         data = request.json
         promo_id = data.get('promo_id')
@@ -499,21 +466,18 @@ def delete_promo():
 
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
-    """Основной эндпоинт для приема данных из Mini App"""
     try:
         data = request.json
         logger.info(f"📥 Получены данные: {data}")
         
         action = data.get('action')
         
-        # Получаем данные пользователя
         user_id = data.get('userId')
         username = data.get('username')
         first_name = data.get('firstName')
         last_name = data.get('lastName')
         full_name = data.get('fullName') or f"{first_name or ''} {last_name or ''}".strip() or "Пользователь"
         
-        # Формируем отображаемое имя
         display_name = full_name
         if username:
             display_name = f"{full_name} (@{username})"
@@ -521,39 +485,35 @@ def webhook():
             display_name = f"{full_name} (ID: {user_id})"
         
         if action == 'order':
-            # Получаем информацию о промокоде
             promo_info = ""
             if data.get('promocode'):
                 promo = data['promocode']
                 promo_info = f"\n🎫 Промокод: {promo['code']} ({promo['value']}{'%' if promo['type'] == 'percent' else ' руб'})"
                 
-                # Записываем использование промокода
                 promo_data = get_promocode(promo['code'])
                 if promo_data:
                     use_promocode(promo_data['id'], user_id, data.get('finalPrice', data.get('totalPrice')))
             
-            # Формируем сообщение для заказа
             message = (
                 f"🛍 <b>НОВЫЙ ЗАКАЗ!</b>\n\n"
                 f"👤 <b>Покупатель:</b> {display_name}\n"
                 f"🆔 <b>ID:</b> <code>{user_id or 'не указан'}</code>\n"
                 f"🏙️ <b>Город:</b> {data.get('city', 'не указан')}\n"
                 f"📦 <b>Товар:</b> {data.get('productName', 'неизвестно')}\n"
-                f"📊 <b>Количество:</b> {data.get('quantity', 1)} гр\n"
-                f"💰 <b>Сумма:</b> {data.get('totalPrice', 0)} руб.\n"
+                f"📊 <b>Количество:</b> {data.get('quantity', 1)} {data.get('unit', 'гр')}\n"
+                f"💰 <b>Цена за {data.get('unit', 'гр')}:</b> {data.get('pricePerUnit', 0)} руб.\n"
+                f"💵 <b>Сумма:</b> {data.get('totalPrice', 0)} руб.\n"
                 f"{promo_info}\n"
                 f"💵 <b>Итого:</b> {data.get('finalPrice', data.get('totalPrice', 0))} руб.\n"
                 f"📅 <b>Время:</b> {data.get('timestamp', datetime.now().isoformat())}"
             )
             
-            # Отправляем админам с кнопками
             if user_id:
                 send_message_to_admins(message, user_id)
             else:
                 send_message_to_admins(message)
             
         elif action == 'contact_admin':
-            # Формируем сообщение для запроса связи
             message = (
                 f"📞 <b>ЗАПРОС СВЯЗИ!</b>\n\n"
                 f"👤 <b>Пользователь:</b> {display_name}\n"
@@ -563,7 +523,6 @@ def webhook():
                 f"💬 Сообщение: {data.get('message', 'Пользователь хочет связаться с администратором')}"
             )
             
-            # Отправляем админам с кнопками
             if user_id:
                 send_message_to_admins(message, user_id)
             else:
