@@ -1,3 +1,7 @@
+import smtplib
+import random
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
@@ -34,8 +38,16 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 SECRET_KEY = os.environ.get("SECRET_KEY", "super-secret-key-change-me")
 app.secret_key = SECRET_KEY
 
-# Хранилище токенов (в продакшене нужно использовать БД)
+# Настройки почты
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "your_email@gmail.com")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "your_app_password")
+
+# Хранилище токенов
 admin_tokens = set()
+# Временное хранилище кодов подтверждения
+verification_codes = {}
 
 # ========== ОБЩИЙ CSS ДЛЯ АДМИН-ПАНЕЛИ ==========
 ADMIN_CSS = '''
@@ -84,7 +96,28 @@ ADMIN_CSS = '''
 </style>
 '''
 
-# ========== API ДЛЯ ТОВАРОВ ==========
+# ========== ФУНКЦИЯ ОТПРАВКИ ПИСЬМА ==========
+def send_email(to_email, subject, body):
+    """Отправляет письмо с указанными параметрами."""
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_EMAIL
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_EMAIL, SMTP_PASSWORD)
+        server.sendmail(SMTP_EMAIL, to_email, msg.as_string())
+        server.quit()
+        logger.info(f"✅ Письмо отправлено на {to_email}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки письма: {e}")
+        return False
+
+# ========== API ДЛЯ ТОВАРОВ (БЕЗ ИЗМЕНЕНИЙ) ==========
 @app.route('/api/products', methods=['GET'])
 def get_products():
     try:
@@ -168,6 +201,174 @@ def get_users():
         response = supabase.table('users').select('*').order('created_at', desc=True).execute()
         return jsonify({"status": "ok", "users": response.data})
     except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ========== АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ==========
+
+@app.route('/api/send-verification', methods=['POST'])
+def send_verification_code():
+    """Отправляет код подтверждения на почту."""
+    data = request.json
+    email = data.get('email', '').strip().lower()
+
+    if not email or '@' not in email:
+        return jsonify({"status": "error", "message": "Некорректный email"}), 400
+
+    # Генерируем 6-значный код
+    code = str(random.randint(100000, 999999))
+    
+    # Сохраняем код
+    verification_codes[email] = {
+        "code": code,
+        "timestamp": time.time(),
+        "attempts": 0
+    }
+
+    # Отправляем письмо
+    subject = "Подтверждение почты | PCGGPRO"
+    body = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+        <h2 style="color: #4a9eff;">🖥️ PCGGPRO</h2>
+        <p>Ваш код подтверждения:</p>
+        <h1 style="letter-spacing: 5px; color: #333;">{code}</h1>
+        <p>Введите этот код на странице регистрации для подтверждения вашей почты.</p>
+        <p style="color: #999; font-size: 12px;">Код действителен в течение 10 минут.</p>
+    </div>
+    """
+
+    if send_email(email, subject, body):
+        return jsonify({"status": "ok", "code": code})  # В продакшене убрать "code" из ответа!
+    else:
+        return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
+
+@app.route('/api/verify-email', methods=['POST'])
+def verify_email_code():
+    """Проверяет код подтверждения."""
+    data = request.json
+    email = data.get('email', '').strip().lower()
+    code = data.get('code', '').strip()
+
+    if email not in verification_codes:
+        return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
+
+    stored_data = verification_codes[email]
+
+    # Проверяем срок действия кода (10 минут)
+    if time.time() - stored_data["timestamp"] > 600:
+        del verification_codes[email]
+        return jsonify({"status": "error", "message": "Код истёк. Запросите новый"}), 400
+
+    # Проверяем количество попыток
+    if stored_data["attempts"] >= 3:
+        del verification_codes[email]
+        return jsonify({"status": "error", "message": "Превышено количество попыток. Запросите новый код"}), 400
+
+    stored_data["attempts"] += 1
+
+    if stored_data["code"] == code:
+        del verification_codes[email]  # Удаляем использованный код
+        return jsonify({"status": "ok", "message": "Почта подтверждена"})
+    else:
+        return jsonify({"status": "error", "message": "Неверный код"}), 400
+
+@app.route('/api/register', methods=['POST'])
+def register_user():
+    """Регистрирует нового пользователя."""
+    data = request.json
+    
+    try:
+        # Проверяем, нет ли уже пользователя с таким email
+        existing = supabase.table('users').select('id').eq('email', data['email']).execute()
+        if existing.data:
+            return jsonify({"status": "error", "message": "Пользователь с таким email уже существует"}), 400
+
+        # Хешируем пароль
+        password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
+
+        # Создаём пользователя
+        response = supabase.table('users').insert({
+            'full_name': data.get('full_name', ''),
+            'email': data['email'].lower(),
+            'telegram': data.get('telegram', ''),
+            'city': data.get('city', ''),
+            'password_hash': password_hash,
+            'email_verified': data.get('email_verified', False),
+            'created_at': datetime.now().isoformat()
+        }).execute()
+
+        return jsonify({"status": "ok", "user": response.data[0]})
+    except Exception as e:
+        logger.error(f"Ошибка регистрации: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/login', methods=['POST'])
+def login_user():
+    """Авторизует пользователя."""
+    data = request.json
+    
+    try:
+        # Ищем пользователя
+        response = supabase.table('users').select('*').eq('email', data['email'].lower()).execute()
+        if not response.data:
+            return jsonify({"status": "error", "message": "Неверный email или пароль"}), 401
+
+        user = response.data[0]
+        password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
+
+        if user['password_hash'] != password_hash:
+            return jsonify({"status": "error", "message": "Неверный email или пароль"}), 401
+
+        # Генерируем токен
+        token = hashlib.sha256(f"{SECRET_KEY}{user['id']}{time.time()}".encode()).hexdigest()
+
+        return jsonify({
+            "status": "ok",
+            "token": token,
+            "user": {
+                "id": user['id'],
+                "full_name": user['full_name'],
+                "email": user['email'],
+                "telegram": user.get('telegram', ''),
+                "city": user.get('city', '')
+            }
+        })
+    except Exception as e:
+        logger.error(f"Ошибка входа: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ========== СТАРЫЕ ЭНДПОИНТЫ ДЛЯ БОТА ==========
+@app.route('/api/webhook', methods=['POST'])
+def webhook():
+    try:
+        data = request.json
+        logger.info(f"📥 Получены данные из Mini App: {data}")
+        
+        action = data.get('action')
+        user_id = data.get('userId')
+        username = data.get('username')
+        first_name = data.get('firstName')
+        last_name = data.get('lastName')
+        full_name = data.get('fullName') or f"{first_name or ''} {last_name or ''}".strip() or "Пользователь"
+        
+        if action == 'order':
+            supabase.table('orders').insert({
+                'user_id': user_id,
+                'username': username,
+                'full_name': full_name,
+                'product_name': data.get('productName'),
+                'quantity': data.get('quantity', 1),
+                'city': data.get('city'),
+                'total_price': data.get('finalPrice', data.get('totalPrice')),
+                'status': 'новый',
+                'created_at': datetime.now().isoformat()
+            }).execute()
+            
+            return jsonify({"status": "ok", "message": "Заказ принят"}), 200
+        
+        return jsonify({"status": "ok", "message": "Обработано"}), 200
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки данных Mini App: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # ========== АДМИН-ПАНЕЛЬ: СТРАНИЦЫ ==========
@@ -650,7 +851,6 @@ def admin_users():
                 const data = await response.json();
                 const tbody = document.querySelector('#usersTable tbody');
                 
-                // Получаем заказы для подсчета
                 const ordersRes = await fetch('/api/orders');
                 const ordersData = await ordersRes.json();
                 const orders = ordersData.orders || [];
@@ -682,41 +882,6 @@ def admin_users():
     </body>
     </html>
     '''
-
-# ========== ОСТАВЛЯЕМ СТАРЫЕ ЭНДПОИНТЫ ДЛЯ БОТА ==========
-@app.route('/api/webhook', methods=['POST'])
-def webhook():
-    try:
-        data = request.json
-        logger.info(f"📥 Получены данные из Mini App: {data}")
-        
-        action = data.get('action')
-        user_id = data.get('userId')
-        username = data.get('username')
-        first_name = data.get('firstName')
-        last_name = data.get('lastName')
-        full_name = data.get('fullName') or f"{first_name or ''} {last_name or ''}".strip() or "Пользователь"
-        
-        if action == 'order':
-            supabase.table('orders').insert({
-                'user_id': user_id,
-                'username': username,
-                'full_name': full_name,
-                'product_name': data.get('productName'),
-                'quantity': data.get('quantity', 1),
-                'city': data.get('city'),
-                'total_price': data.get('finalPrice', data.get('totalPrice')),
-                'status': 'новый',
-                'created_at': datetime.now().isoformat()
-            }).execute()
-            
-            return jsonify({"status": "ok", "message": "Заказ принят"}), 200
-        
-        return jsonify({"status": "ok", "message": "Обработано"}), 200
-        
-    except Exception as e:
-        logger.error(f"Ошибка обработки данных Mini App: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
