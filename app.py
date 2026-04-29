@@ -40,7 +40,7 @@ app.secret_key = SECRET_KEY
 
 # Настройки почты
 SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
+SMTP_PORT = 465
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "your_email@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "your_app_password")
 
@@ -106,8 +106,8 @@ def send_email(to_email, subject, body):
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'html'))
 
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
+        server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=10)
+        ##server.starttls()
         server.login(SMTP_EMAIL, SMTP_PASSWORD)
         server.sendmail(SMTP_EMAIL, to_email, msg.as_string())
         server.quit()
