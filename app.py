@@ -97,41 +97,31 @@ ADMIN_CSS = '''
 
 # ========== ФУНКЦИЯ ОТПРАВКИ ПИСЬМА ==========
 def send_email(to_email, subject, body):
-    """Отправляет письмо через Mailtrap API."""
-    MAILTRAP_API_KEY = os.environ.get("MAILTRAP_API_KEY", "")
-    
-    if not MAILTRAP_API_KEY:
-        logger.error("❌ MAILTRAP_API_KEY не задан!")
+    """Отправляет письмо с указанными параметрами через SMTP (Brevo)."""
+    SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp-relay.brevo.com")
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "a9c454001@smtp.brevo.com")
+    SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+    SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")  # ← Твоя почта
+
+    if not SMTP_PASSWORD:
+        logger.error("❌ SMTP_PASSWORD не задан!")
         return False
-    
+
     try:
-        import requests as http_requests
-        
-        payload = {
-            "from": {"email": SENDER_EMAIL, "name": "PCGGPRO"},
-            "to": [{"email": to_email}],
-            "subject": subject,
-            "html": body
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {MAILTRAP_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        response = http_requests.post(
-            "https://sandbox.api.mailtrap.io/api/send",  # ← исправленный URL
-            json=payload,
-            headers=headers,
-            timeout=15
-        )
-        
-        if response.status_code == 200:
-            logger.info(f"✅ Письмо отправлено на {to_email}")
-            return True
-        else:
-            logger.error(f"❌ Ошибка Mailtrap: {response.status_code} - {response.text}")
-            return False
+        msg = MIMEMultipart()
+        msg['From'] = f"PCGGPRO <{SENDER_EMAIL}>"  # ← Отправитель: твоя почта
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=15)
+        server.starttls()
+        server.login(SMTP_EMAIL, SMTP_PASSWORD)
+        server.sendmail(SENDER_EMAIL, to_email, msg.as_string())
+        server.quit()
+        logger.info(f"✅ Письмо отправлено на {to_email}")
+        return True
     except Exception as e:
         logger.error(f"❌ Ошибка отправки письма: {e}")
         return False
