@@ -97,39 +97,40 @@ ADMIN_CSS = '''
 
 # ========== ФУНКЦИЯ ОТПРАВКИ ПИСЬМА ==========
 def send_email(to_email, subject, body):
-    """Отправляет письмо через Brevo API."""
-    if not BREVO_API_KEY:
-        logger.error("❌ BREVO_API_KEY не задан!")
+    """Отправляет письмо через Mailtrap API."""
+    MAILTRAP_API_KEY = os.environ.get("MAILTRAP_API_KEY", "")
+    
+    if not MAILTRAP_API_KEY:
+        logger.error("❌ MAILTRAP_API_KEY не задан!")
         return False
     
     try:
         import requests as http_requests
         
         payload = {
-            "sender": {"email": SENDER_EMAIL, "name": "PCGGPRO"},
+            "from": {"email": SENDER_EMAIL, "name": "PCGGPRO"},
             "to": [{"email": to_email}],
             "subject": subject,
-            "htmlContent": body
+            "html": body
         }
         
         headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-            "api-key": BREVO_API_KEY
+            "Authorization": f"Bearer {MAILTRAP_API_KEY}",
+            "Content-Type": "application/json"
         }
         
         response = http_requests.post(
-            "https://api.brevo.com/v3/smtp/email",
+            "https://send.api.mailtrap.io/api/send",
             json=payload,
             headers=headers,
             timeout=15
         )
         
-        if response.status_code == 201:
+        if response.status_code == 200:
             logger.info(f"✅ Письмо отправлено на {to_email}")
             return True
         else:
-            logger.error(f"❌ Ошибка Brevo: {response.status_code} - {response.text}")
+            logger.error(f"❌ Ошибка Mailtrap: {response.status_code} - {response.text}")
             return False
     except Exception as e:
         logger.error(f"❌ Ошибка отправки письма: {e}")
