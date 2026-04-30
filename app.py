@@ -99,7 +99,7 @@ ADMIN_CSS = '''
 def send_email(to_email, subject, body):
     """Отправляет письмо с указанными параметрами через SMTP (Brevo)."""
     SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp-relay.brevo.com")
-    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "2525"))
     SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "a9c454001@smtp.brevo.com")
     SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
     SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")  # ← Твоя почта
