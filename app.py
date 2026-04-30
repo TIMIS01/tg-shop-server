@@ -120,7 +120,7 @@ def send_email(to_email, subject, body):
         }
         
         response = http_requests.post(
-            "https://api.mailtrap.io/api/send",  # ← исправленный URL
+            "https://sandbox.api.mailtrap.io/api/send",  # ← исправленный URL
             json=payload,
             headers=headers,
             timeout=15
