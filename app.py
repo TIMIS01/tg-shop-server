@@ -39,10 +39,9 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "super-secret-key-change-me")
 app.secret_key = SECRET_KEY
 
 # Настройки почты
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 465
-SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "your_email@gmail.com")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "your_app_password")
+# Настройки почты (Brevo API)
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+SENDER_EMAIL = os.environ.get("SMTP_EMAIL", "pcggpronotif@gmail.com")
 
 # Хранилище токенов
 admin_tokens = set()
@@ -98,21 +97,40 @@ ADMIN_CSS = '''
 
 # ========== ФУНКЦИЯ ОТПРАВКИ ПИСЬМА ==========
 def send_email(to_email, subject, body):
-    """Отправляет письмо с указанными параметрами."""
+    """Отправляет письмо через Brevo API."""
+    if not BREVO_API_KEY:
+        logger.error("❌ BREVO_API_KEY не задан!")
+        return False
+    
     try:
-        msg = MIMEMultipart()
-        msg['From'] = SMTP_EMAIL
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'html'))
-
-        server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=10)
-        ##server.starttls()
-        server.login(SMTP_EMAIL, SMTP_PASSWORD)
-        server.sendmail(SMTP_EMAIL, to_email, msg.as_string())
-        server.quit()
-        logger.info(f"✅ Письмо отправлено на {to_email}")
-        return True
+        import requests as http_requests
+        
+        payload = {
+            "sender": {"email": SENDER_EMAIL, "name": "PCGGPRO"},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "htmlContent": body
+        }
+        
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "api-key": BREVO_API_KEY
+        }
+        
+        response = http_requests.post(
+            "https://api.brevo.com/v3/smtp/email",
+            json=payload,
+            headers=headers,
+            timeout=15
+        )
+        
+        if response.status_code == 201:
+            logger.info(f"✅ Письмо отправлено на {to_email}")
+            return True
+        else:
+            logger.error(f"❌ Ошибка Brevo: {response.status_code} - {response.text}")
+            return False
     except Exception as e:
         logger.error(f"❌ Ошибка отправки письма: {e}")
         return False
