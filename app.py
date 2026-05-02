@@ -100,12 +100,12 @@ ADMIN_CSS = '''
 
 # ========== ФУНКЦИЯ ОТПРАВКИ ПИСЬМА ==========
 def send_email(to_email, subject, body):
-    """Отправляет письмо с указанными параметрами через SMTP (Brevo)."""
-    SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp-relay.brevo.com")
-    SMTP_PORT = int(os.environ.get("SMTP_PORT", "2525"))
-    SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "a9c454001@smtp.brevo.com")
+    """Отправляет письмо с указанными параметрами через SMTP."""
+    SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.go2.unisender.ru")
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "8182510")
     SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-    SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")  # ← Твоя почта
+    SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")
 
     if not SMTP_PASSWORD:
         logger.error("❌ SMTP_PASSWORD не задан!")
@@ -113,7 +113,7 @@ def send_email(to_email, subject, body):
 
     try:
         msg = MIMEMultipart()
-        msg['From'] = f"PCGGPRO <{SENDER_EMAIL}>"  # ← Отправитель: твоя почта
+        msg['From'] = f"PCGGPRO <{SENDER_EMAIL}>"
         msg['To'] = to_email
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'html'))
@@ -128,6 +128,58 @@ def send_email(to_email, subject, body):
     except Exception as e:
         logger.error(f"❌ Ошибка отправки письма: {e}")
         return False
+
+
+def send_order_notification(order_data):
+    """Отправляет уведомление о новом заказе на почту продавца."""
+    SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.go2.unisender.ru")
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "8182510")
+    SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+    SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")
+    ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "pcggpronotif@gmail.com")
+
+    if not SMTP_PASSWORD:
+        logger.error("❌ SMTP_PASSWORD не задан!")
+        return False
+
+    try:
+        subject = f"🛒 Новый заказ #{order_data.get('order_id', '—')} | PCGGPRO"
+        body = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2 style="color: #4a9eff;">🛒 Новый заказ на PCGGPRO</h2>
+            <table style="border-collapse: collapse; width: 100%;">
+                <tr><td style="padding: 8px; font-weight: bold;">Номер заказа:</td><td style="padding: 8px;">#{order_data.get('order_id', '—')}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Товары:</td><td style="padding: 8px;">{order_data.get('product_name', '—')}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Сумма:</td><td style="padding: 8px;">{order_data.get('price', 0)} руб.</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Город:</td><td style="padding: 8px;">{order_data.get('city', '—')}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Почтовое отделение:</td><td style="padding: 8px;">{order_data.get('postal', '—')}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Комментарий:</td><td style="padding: 8px;">{order_data.get('comment', '—')}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Дата:</td><td style="padding: 8px;">{order_data.get('timestamp', '—')}</td></tr>
+            </table>
+            <p style="margin-top: 20px; color: #666;">Свяжитесь с покупателем для уточнения деталей.</p>
+        </body>
+        </html>
+        """
+
+        msg = MIMEMultipart()
+        msg['From'] = f"PCGGPRO <{SENDER_EMAIL}>"
+        msg['To'] = ADMIN_EMAIL
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=15)
+        server.starttls()
+        server.login(SMTP_EMAIL, SMTP_PASSWORD)
+        server.sendmail(SENDER_EMAIL, ADMIN_EMAIL, msg.as_string())
+        server.quit()
+        logger.info(f"✅ Уведомление о заказе отправлено на {ADMIN_EMAIL}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки уведомления: {e}")
+        return False
+
 
 # ========== API ДЛЯ ТОВАРОВ (БЕЗ ИЗМЕНЕНИЙ) ==========
 @app.route('/api/products', methods=['GET'])
@@ -374,6 +426,18 @@ def webhook():
                 'status': 'новый',
                 'created_at': datetime.now().isoformat()
             }).execute()
+            
+            # Отправка уведомления о новом заказе на почту
+            order_notification_data = {
+                "order_id": data.get('order_id', '—'),
+                "product_name": data.get('productName', '—'),
+                "price": data.get('price', 0),
+                "city": data.get('city', '—'),
+                "postal": data.get('postal', '—'),
+                "comment": data.get('comment', '—'),
+                "timestamp": datetime.now().strftime("%d.%m.%Y %H:%M")
+            }
+            send_order_notification(order_notification_data)
             
             return jsonify({"status": "ok", "message": "Заказ принят"}), 200
         
