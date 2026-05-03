@@ -142,14 +142,14 @@ def send_email(to_email, subject, body):
 
 
 def send_order_notification(order_data):
-    """Отправляет уведомление о новом заказе на почту продавца через Unisender Go API."""
-    UNISENDER_API_KEY = os.environ.get("UNISENDER_API_KEY", "")
+    """Отправляет уведомление о новом заказе на почту продавца через Brevo API."""
+    BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
     ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "pcggpronotif@gmail.com")
     SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")
     SENDER_NAME = "PCGGPRO"
 
-    if not UNISENDER_API_KEY:
-        logger.error("❌ UNISENDER_API_KEY не задан!")
+    if not BREVO_API_KEY:
+        logger.error("❌ BREVO_API_KEY не задан!")
         return False
 
     try:
@@ -175,36 +175,30 @@ def send_order_notification(order_data):
         """
 
         payload = {
-            "api_key": UNISENDER_API_KEY,
-            "sender_name": SENDER_NAME,
-            "sender_email": SENDER_EMAIL,
-            "recipient_email": ADMIN_EMAIL,
+            "sender": {"email": SENDER_EMAIL, "name": SENDER_NAME},
+            "to": [{"email": ADMIN_EMAIL}],
             "subject": subject,
-            "body": body,
-            "list_id": 1
+            "htmlContent": body
         }
 
         headers = {
-            "Content-Type": "application/json"
+            "accept": "application/json",
+            "content-type": "application/json",
+            "api-key": BREVO_API_KEY
         }
 
         response = http_requests.post(
-            "https://go.unisender.ru/ru/transactional/api/v1/email/send.json",
+            "https://api.brevo.com/v3/smtp/email",
             json=payload,
             headers=headers,
             timeout=15
         )
 
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("status") == "success":
-                logger.info(f"✅ Уведомление о заказе отправлено на {ADMIN_EMAIL}")
-                return True
-            else:
-                logger.error(f"❌ Ошибка Unisender Go: {result}")
-                return False
+        if response.status_code == 201:
+            logger.info(f"✅ Уведомление о заказе отправлено на {ADMIN_EMAIL}")
+            return True
         else:
-            logger.error(f"❌ Ошибка Unisender Go: {response.status_code} - {response.text}")
+            logger.error(f"❌ Ошибка Brevo: {response.status_code} - {response.text}")
             return False
     except Exception as e:
         logger.error(f"❌ Ошибка отправки уведомления: {e}")
