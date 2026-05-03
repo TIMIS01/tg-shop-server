@@ -41,14 +41,12 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 SECRET_KEY = os.environ.get("SECRET_KEY", "super-secret-key-change-me")
 app.secret_key = SECRET_KEY
 
-# Настройки почты
-# Настройки почты (Brevo API)
+# Настройки почты (для регистрации и уведомлений)
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
-SENDER_EMAIL = os.environ.get("SMTP_EMAIL", "pcggpronotif@gmail.com")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")
 
-# Хранилище токенов
+# Хранилище токенов и кодов
 admin_tokens = set()
-# Временное хранилище кодов подтверждения
 verification_codes = {}
 
 # ========== ОБЩИЙ CSS ДЛЯ АДМИН-ПАНЕЛИ ==========
@@ -98,7 +96,7 @@ ADMIN_CSS = '''
 </style>
 '''
 
-# ========== ФУНКЦИЯ ОТПРАВКИ ПИСЬМА ==========
+# ========== ФУНКЦИИ ОТПРАВКИ ПИСЕМ ==========
 def send_email(to_email, subject, body):
     """Отправляет письмо с указанными параметрами через SMTP."""
     SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.go2.unisender.ru")
@@ -181,7 +179,7 @@ def send_order_notification(order_data):
         return False
 
 
-# ========== API ДЛЯ ТОВАРОВ (БЕЗ ИЗМЕНЕНИЙ) ==========
+# ========== API ДЛЯ ТОВАРОВ ==========
 @app.route('/api/products', methods=['GET'])
 def get_products():
     try:
@@ -249,11 +247,30 @@ def get_orders():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/api/orders/by-email', methods=['GET'])
+def get_orders_by_email():
+    email = request.args.get('email', '').strip().lower()
+    if not email:
+        return jsonify({"status": "error", "message": "Email не указан"}), 400
+    try:
+        response = supabase.table('orders').select('*').eq('user_email', email).order('created_at', desc=True).execute()
+        return jsonify({"status": "ok", "orders": response.data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/api/orders/<int:order_id>/status', methods=['PUT'])
 def update_order_status(order_id):
     data = request.json
     try:
-        supabase.table('orders').update({'status': data['status']}).eq('id', order_id).execute()
+        updates = {}
+        if 'status' in data:
+            updates['status'] = data['status']
+        if 'tracking_number' in data:
+            updates['tracking_number'] = data['tracking_number']
+        
+        if updates:
+            supabase.table('orders').update(updates).eq('id', order_id).execute()
+        
         return jsonify({"status": "ok"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -268,27 +285,21 @@ def get_users():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # ========== АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ==========
-
 @app.route('/api/send-verification', methods=['POST'])
 def send_verification_code():
-    """Отправляет код подтверждения на почту."""
     data = request.json
     email = data.get('email', '').strip().lower()
 
     if not email or '@' not in email:
         return jsonify({"status": "error", "message": "Некорректный email"}), 400
 
-    # Генерируем 6-значный код
     code = str(random.randint(100000, 999999))
-    
-    # Сохраняем код
     verification_codes[email] = {
         "code": code,
         "timestamp": time.time(),
         "attempts": 0
     }
 
-    # Отправляем письмо
     subject = "Подтверждение почты | PCGGPRO"
     body = f"""
     <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
@@ -301,13 +312,12 @@ def send_verification_code():
     """
 
     if send_email(email, subject, body):
-        return jsonify({"status": "ok", "code": code})  # В продакшене убрать "code" из ответа!
+        return jsonify({"status": "ok", "code": code})
     else:
         return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
 
 @app.route('/api/verify-email', methods=['POST'])
 def verify_email_code():
-    """Проверяет код подтверждения."""
     data = request.json
     email = data.get('email', '').strip().lower()
     code = data.get('code', '').strip()
@@ -317,12 +327,10 @@ def verify_email_code():
 
     stored_data = verification_codes[email]
 
-    # Проверяем срок действия кода (10 минут)
     if time.time() - stored_data["timestamp"] > 600:
         del verification_codes[email]
         return jsonify({"status": "error", "message": "Код истёк. Запросите новый"}), 400
 
-    # Проверяем количество попыток
     if stored_data["attempts"] >= 3:
         del verification_codes[email]
         return jsonify({"status": "error", "message": "Превышено количество попыток. Запросите новый код"}), 400
@@ -330,26 +338,21 @@ def verify_email_code():
     stored_data["attempts"] += 1
 
     if stored_data["code"] == code:
-        del verification_codes[email]  # Удаляем использованный код
+        del verification_codes[email]
         return jsonify({"status": "ok", "message": "Почта подтверждена"})
     else:
         return jsonify({"status": "error", "message": "Неверный код"}), 400
 
 @app.route('/api/register', methods=['POST'])
 def register_user():
-    """Регистрирует нового пользователя."""
     data = request.json
-    
     try:
-        # Проверяем, нет ли уже пользователя с таким email
         existing = supabase.table('users').select('id').eq('email', data['email']).execute()
         if existing.data:
             return jsonify({"status": "error", "message": "Пользователь с таким email уже существует"}), 400
 
-        # Хешируем пароль
         password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
 
-        # Создаём пользователя
         response = supabase.table('users').insert({
             'full_name': data.get('full_name', ''),
             'email': data['email'].lower(),
@@ -367,11 +370,8 @@ def register_user():
 
 @app.route('/api/login', methods=['POST'])
 def login_user():
-    """Авторизует пользователя."""
     data = request.json
-    
     try:
-        # Ищем пользователя
         response = supabase.table('users').select('*').eq('email', data['email'].lower()).execute()
         if not response.data:
             return jsonify({"status": "error", "message": "Неверный email или пароль"}), 401
@@ -382,7 +382,6 @@ def login_user():
         if user['password_hash'] != password_hash:
             return jsonify({"status": "error", "message": "Неверный email или пароль"}), 401
 
-        # Генерируем токен
         token = hashlib.sha256(f"{SECRET_KEY}{user['id']}{time.time()}".encode()).hexdigest()
 
         return jsonify({
@@ -400,7 +399,7 @@ def login_user():
         logger.error(f"Ошибка входа: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ========== СТАРЫЕ ЭНДПОИНТЫ ДЛЯ БОТА ==========
+# ========== ВЕБХУК ДЛЯ БОТА И САЙТА ==========
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
     try:
@@ -408,30 +407,32 @@ def webhook():
         logger.info(f"📥 Получены данные из Mini App: {data}")
         
         action = data.get('action')
-        user_id = data.get('userId')
-        username = data.get('username')
-        first_name = data.get('firstName')
-        last_name = data.get('lastName')
-        full_name = data.get('fullName') or f"{first_name or ''} {last_name or ''}".strip() or "Пользователь"
         
         if action == 'order':
-            supabase.table('orders').insert({
-                'user_id': user_id,
-                'username': username,
-                'full_name': full_name,
+            order_data = {
+                'user_id': str(data.get('userId', 'website_user')),
+                'username': data.get('username', data.get('full_name', 'Пользователь')),
+                'full_name': data.get('full_name', data.get('username', 'Пользователь')),
+                'user_email': data.get('user_email', ''),
+                'telegram': data.get('telegram', ''),
                 'product_name': data.get('productName'),
                 'quantity': data.get('quantity', 1),
                 'city': data.get('city'),
-                'total_price': data.get('finalPrice', data.get('totalPrice')),
-                'status': 'новый',
+                'total_price': data.get('finalPrice', data.get('totalPrice', data.get('price', 0))),
+                'status': 'оформлен',
                 'created_at': datetime.now().isoformat()
-            }).execute()
+            }
+            
+            # Удаляем ключи со значением None, чтобы не пытаться вставить их в БД
+            order_data = {k: v for k, v in order_data.items() if v is not None}
+            
+            response = supabase.table('orders').insert(order_data).execute()
             
             # Отправка уведомления о новом заказе на почту
             order_notification_data = {
-                "order_id": data.get('order_id', '—'),
+                "order_id": response.data[0]['id'] if response.data else '—',
                 "product_name": data.get('productName', '—'),
-                "price": data.get('price', 0),
+                "price": data.get('price', data.get('totalPrice', 0)),
                 "city": data.get('city', '—'),
                 "postal": data.get('postal', '—'),
                 "comment": data.get('comment', '—'),
@@ -560,7 +561,7 @@ def admin_dashboard():
                 const ordersData = await ordersRes.json();
                 const orders = ordersData.orders || [];
                 document.getElementById('ordersCount').textContent = orders.length;
-                document.getElementById('newOrdersCount').textContent = orders.filter(o => o.status === 'новый').length;
+                document.getElementById('newOrdersCount').textContent = orders.filter(o => o.status === 'оформлен').length;
                 
                 const totalRevenue = orders.reduce((sum, o) => sum + (o.total_price || 0), 0);
                 document.getElementById('revenueCount').textContent = totalRevenue.toLocaleString() + ' ₽';
@@ -620,26 +621,11 @@ def admin_products():
                     <label>Цена (₽)</label>
                     <input type="number" id="price" required>
                     <div class="detail-grid">
-                        <div>
-                            <label>Процессор</label>
-                            <input type="text" id="cpu">
-                        </div>
-                        <div>
-                            <label>Видеокарта</label>
-                            <input type="text" id="gpu">
-                        </div>
-                        <div>
-                            <label>ОЗУ</label>
-                            <input type="text" id="ram">
-                        </div>
-                        <div>
-                            <label>Накопитель</label>
-                            <input type="text" id="storage">
-                        </div>
-                        <div>
-                            <label>Блок питания</label>
-                            <input type="text" id="psu">
-                        </div>
+                        <div><label>Процессор</label><input type="text" id="cpu"></div>
+                        <div><label>Видеокарта</label><input type="text" id="gpu"></div>
+                        <div><label>ОЗУ</label><input type="text" id="ram"></div>
+                        <div><label>Накопитель</label><input type="text" id="storage"></div>
+                        <div><label>Блок питания</label><input type="text" id="psu"></div>
                     </div>
                     <label>Описание</label>
                     <textarea id="description" rows="4"></textarea>
@@ -671,16 +657,8 @@ def admin_products():
                 `).join('');
             }}
             
-            function openAddModal() {{
-                editingId = null;
-                document.getElementById('modalTitle').textContent = 'Добавить товар';
-                document.getElementById('productForm').reset();
-                document.getElementById('productModal').style.display = 'flex';
-            }}
-            
-            function closeModal() {{
-                document.getElementById('productModal').style.display = 'none';
-            }}
+            function openAddModal() {{ editingId = null; document.getElementById('modalTitle').textContent = 'Добавить товар'; document.getElementById('productForm').reset(); document.getElementById('productModal').style.display = 'flex'; }}
+            function closeModal() {{ document.getElementById('productModal').style.display = 'none'; }}
             
             async function editProduct(id) {{
                 editingId = id;
@@ -724,28 +702,15 @@ def admin_products():
                 }};
                 
                 if (editingId) {{
-                    await fetch(`/api/products/${{editingId}}`, {{
-                        method: 'PUT',
-                        headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify(productData)
-                    }});
+                    await fetch(`/api/products/${{editingId}}`, {{ method: 'PUT', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify(productData) }});
                 }} else {{
-                    await fetch('/api/products', {{
-                        method: 'POST',
-                        headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify(productData)
-                    }});
+                    await fetch('/api/products', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify(productData) }});
                 }}
-                
                 closeModal();
                 loadProducts();
             }});
             
-            function logout() {{
-                localStorage.removeItem('admin_token');
-                window.location.href = '/admin';
-            }}
-            
+            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
             loadProducts();
         </script>
     </body>
@@ -777,7 +742,7 @@ def admin_orders():
             <div class="card">
                 <table id="ordersTable">
                     <thead>
-                        <tr><th>ID</th><th>Клиент</th><th>Товар</th><th>Сумма</th><th>Город</th><th>Статус</th><th>Дата</th><th>Действия</th></tr>
+                        <tr><th>ID</th><th>Клиент</th><th>Email</th><th>Товар</th><th>Сумма</th><th>Город</th><th>Статус</th><th>Дата</th><th>Действия</th></tr>
                     </thead>
                     <tbody></tbody>
                 </table>
@@ -791,12 +756,15 @@ def admin_orders():
                 <div style="margin-top: 20px;">
                     <label>Изменить статус</label>
                     <select id="orderStatus" style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px;">
-                        <option value="новый">Новый</option>
-                        <option value="в обработке">В обработке</option>
+                        <option value="оформлен">Оформлен</option>
+                        <option value="принят">Принят</option>
+                        <option value="в сборке">В сборке</option>
                         <option value="отправлен">Отправлен</option>
                         <option value="доставлен">Доставлен</option>
                         <option value="отменён">Отменён</option>
                     </select>
+                    <label style="margin-top: 15px;">Трек-номер</label>
+                    <input type="text" id="trackingNumber" placeholder="Введите трек-номер">
                     <div style="margin-top: 15px; display: flex; gap: 10px;">
                         <button class="btn btn-primary" onclick="saveOrderStatus()">Сохранить</button>
                         <button class="btn btn-danger" onclick="closeModal()">Закрыть</button>
@@ -812,8 +780,9 @@ def admin_orders():
                 const data = await response.json();
                 const tbody = document.querySelector('#ordersTable tbody');
                 const statusBadges = {{
-                    'новый': 'badge-info',
-                    'в обработке': 'badge-warning',
+                    'оформлен': 'badge-info',
+                    'принят': 'badge-warning',
+                    'в сборке': 'badge-warning',
                     'отправлен': 'badge-primary',
                     'доставлен': 'badge-success',
                     'отменён': 'badge-danger'
@@ -825,15 +794,14 @@ def admin_orders():
                     return `
                         <tr>
                             <td>#${{o.id}}</td>
-                            <td><strong>${{o.username || '—'}}</strong></td>
+                            <td><strong>${{o.full_name || o.username || '—'}}</strong></td>
+                            <td>${{o.user_email || '—'}}</td>
                             <td>${{o.product_name || '—'}}</td>
                             <td>${{(o.total_price || 0).toLocaleString()}} ₽</td>
                             <td>${{o.city || '—'}}</td>
-                            <td><span class="badge ${{statusBadges[o.status] || 'badge-info'}}">${{o.status || 'новый'}}</span></td>
+                            <td><span class="badge ${{statusBadges[o.status] || 'badge-info'}}">${{o.status || 'оформлен'}}</span></td>
                             <td>${{dateStr}}</td>
-                            <td>
-                                <button class="btn btn-info" onclick="viewOrder(${{o.id}})">👁️</button>
-                            </td>
+                            <td><button class="btn btn-info" onclick="viewOrder(${{o.id}})">👁️</button></td>
                         </tr>
                     `;
                 }}).join('');
@@ -845,16 +813,21 @@ def admin_orders():
                 const data = await response.json();
                 const order = (data.orders || []).find(o => o.id === id);
                 if (order) {{
-                    document.getElementById('orderStatus').value = order.status || 'новый';
+                    document.getElementById('orderStatus').value = order.status || 'оформлен';
+                    document.getElementById('trackingNumber').value = order.tracking_number || '';
                     document.getElementById('orderDetails').innerHTML = `
                         <div class="detail-grid">
-                            <div class="detail-item"><strong>Клиент</strong><span>${{order.username || '—'}}</span></div>
-                            <div class="detail-item"><strong>ID пользователя</strong><span>${{order.user_id || '—'}}</span></div>
+                            <div class="detail-item"><strong>Клиент</strong><span>${{order.full_name || order.username || '—'}}</span></div>
+                            <div class="detail-item"><strong>Email</strong><span>${{order.user_email || '—'}}</span></div>
+                            <div class="detail-item"><strong>Telegram</strong><span>${{order.telegram || '—'}}</span></div>
                             <div class="detail-item"><strong>Товар</strong><span>${{order.product_name || '—'}}</span></div>
                             <div class="detail-item"><strong>Количество</strong><span>${{order.quantity || 1}}</span></div>
                             <div class="detail-item"><strong>Цена</strong><span>${{(order.total_price || 0).toLocaleString()}} ₽</span></div>
                             <div class="detail-item"><strong>Город</strong><span>${{order.city || '—'}}</span></div>
-                            <div class="detail-item"><strong>Статус</strong><span>${{order.status || 'новый'}}</span></div>
+                            <div class="detail-item"><strong>Почтовое отделение</strong><span>${{order.postal || '—'}}</span></div>
+                            <div class="detail-item"><strong>Комментарий</strong><span>${{order.comment || '—'}}</span></div>
+                            <div class="detail-item"><strong>Статус</strong><span>${{order.status || 'оформлен'}}</span></div>
+                            <div class="detail-item"><strong>Трек-номер</strong><span>${{order.tracking_number || '—'}}</span></div>
                             <div class="detail-item"><strong>Дата</strong><span>${{new Date(order.created_at || order.order_date).toLocaleString('ru-RU')}}</span></div>
                         </div>
                     `;
@@ -865,25 +838,19 @@ def admin_orders():
             async function saveOrderStatus() {{
                 if (currentOrderId) {{
                     const newStatus = document.getElementById('orderStatus').value;
+                    const trackingNumber = document.getElementById('trackingNumber').value.trim();
                     await fetch(`/api/orders/${{currentOrderId}}/status`, {{
                         method: 'PUT',
                         headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ status: newStatus }})
+                        body: JSON.stringify({{ status: newStatus, tracking_number: trackingNumber }})
                     }});
                     closeModal();
                     loadOrders();
                 }}
             }}
             
-            function closeModal() {{
-                document.getElementById('orderModal').style.display = 'none';
-            }}
-            
-            function logout() {{
-                localStorage.removeItem('admin_token');
-                window.location.href = '/admin';
-            }}
-            
+            function closeModal() {{ document.getElementById('orderModal').style.display = 'none'; }}
+            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
             loadOrders();
         </script>
     </body>
@@ -932,13 +899,13 @@ def admin_users():
                 const orders = ordersData.orders || [];
                 
                 tbody.innerHTML = (data.users || []).map(u => {{
-                    const userOrders = orders.filter(o => o.user_id == u.id);
+                    const userOrders = orders.filter(o => o.user_email == u.email);
                     const date = new Date(u.created_at);
                     const dateStr = date.toLocaleString('ru-RU', {{ day: 'numeric', month: 'short', year: 'numeric' }});
                     return `
                         <tr>
                             <td>${{u.id}}</td>
-                            <td><strong>${{u.username || u.full_name || '—'}}</strong></td>
+                            <td><strong>${{u.full_name || '—'}}</strong></td>
                             <td>${{u.email || '—'}}</td>
                             <td>${{u.city || '—'}}</td>
                             <td><span class="badge badge-info">${{userOrders.length}}</span></td>
@@ -948,11 +915,7 @@ def admin_users():
                 }}).join('');
             }}
             
-            function logout() {{
-                localStorage.removeItem('admin_token');
-                window.location.href = '/admin';
-            }}
-            
+            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
             loadUsers();
         </script>
     </body>
