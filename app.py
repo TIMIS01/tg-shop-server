@@ -962,6 +962,118 @@ def admin_users():
     </html>
     '''
 
+
+
+# ========== ВОССТАНОВЛЕНИЕ ПАРОЛЯ ==========
+reset_tokens = {}
+
+@app.route('/api/forgot-password', methods=['POST'])
+def forgot_password():
+    """Отправляет код восстановления пароля на почту."""
+    data = request.json
+    email = data.get('email', '').strip().lower()
+
+    if not email or '@' not in email:
+        return jsonify({"status": "error", "message": "Некорректный email"}), 400
+
+    # Проверяем, существует ли пользователь с такой почтой
+    try:
+        existing = supabase.table('users').select('id').eq('email', email).execute()
+        if not existing.data:
+            # Не говорим, что пользователь не найден (безопасность)
+            return jsonify({"status": "ok", "message": "Если такой email зарегистрирован, код отправлен"}), 200
+    except:
+        return jsonify({"status": "error", "message": "Ошибка сервера"}), 500
+
+    # Генерируем код и токен
+    code = str(random.randint(100000, 999999))
+    reset_token = hashlib.sha256(f"{SECRET_KEY}{email}{time.time()}".encode()).hexdigest()
+
+    reset_tokens[email] = {
+        "code": code,
+        "token": reset_token,
+        "timestamp": time.time(),
+        "attempts": 0
+    }
+
+    subject = "Восстановление пароля | PCGGPRO"
+    body = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+        <h2 style="color: #4a9eff;">🖥️ PCGGPRO</h2>
+        <p>Ваш код для восстановления пароля:</p>
+        <h1 style="letter-spacing: 5px; color: #333;">{code}</h1>
+        <p>Введите этот код на странице восстановления пароля.</p>
+        <p style="color: #999; font-size: 12px;">Код действителен в течение 10 минут.</p>
+    </div>
+    """
+
+    if send_email(email, subject, body):
+        return jsonify({"status": "ok", "reset_token": reset_token})
+    else:
+        return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
+
+
+@app.route('/api/verify-reset-code', methods=['POST'])
+def verify_reset_code():
+    """Проверяет код восстановления пароля."""
+    data = request.json
+    email = data.get('email', '').strip().lower()
+    code = data.get('code', '').strip()
+    token = data.get('reset_token', '').strip()
+
+    if email not in reset_tokens:
+        return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
+
+    stored = reset_tokens[email]
+
+    if stored["token"] != token:
+        return jsonify({"status": "error", "message": "Неверный токен"}), 400
+
+    if time.time() - stored["timestamp"] > 600:
+        del reset_tokens[email]
+        return jsonify({"status": "error", "message": "Код истёк. Запросите новый"}), 400
+
+    if stored["attempts"] >= 3:
+        del reset_tokens[email]
+        return jsonify({"status": "error", "message": "Превышено количество попыток"}), 400
+
+    stored["attempts"] += 1
+
+    if stored["code"] == code:
+        return jsonify({"status": "ok", "message": "Код подтверждён"})
+    else:
+        return jsonify({"status": "error", "message": "Неверный код"}), 400
+
+
+@app.route('/api/reset-password', methods=['POST'])
+def reset_password():
+    """Устанавливает новый пароль."""
+    data = request.json
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+    token = data.get('reset_token', '')
+
+    if email not in reset_tokens:
+        return jsonify({"status": "error", "message": "Токен не найден или истёк"}), 400
+
+    stored = reset_tokens[email]
+
+    if stored["token"] != token:
+        return jsonify({"status": "error", "message": "Неверный токен"}), 400
+
+    if len(password) < 6:
+        return jsonify({"status": "error", "message": "Пароль должен быть не менее 6 символов"}), 400
+
+    try:
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        supabase.table('users').update({'password_hash': password_hash}).eq('email', email).execute()
+        del reset_tokens[email]
+        return jsonify({"status": "ok", "message": "Пароль изменён"})
+    except Exception as e:
+        logger.error(f"Ошибка смены пароля: {e}")
+        return jsonify({"status": "error", "message": "Ошибка смены пароля"}), 500
+    
+
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
