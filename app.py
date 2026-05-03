@@ -142,19 +142,19 @@ def send_email(to_email, subject, body):
 
 
 def send_order_notification(order_data):
-    """Отправляет уведомление о новом заказе на почту продавца."""
-    SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.go2.unisender.ru")
-    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-    SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "8182510")
-    SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-    SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")
+    """Отправляет уведомление о новом заказе на почту продавца через Unisender Go API."""
+    UNISENDER_API_KEY = os.environ.get("UNISENDER_API_KEY", "")
     ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "pcggpronotif@gmail.com")
+    SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")
+    SENDER_NAME = "PCGGPRO"
 
-    if not SMTP_PASSWORD:
-        logger.error("❌ SMTP_PASSWORD не задан!")
+    if not UNISENDER_API_KEY:
+        logger.error("❌ UNISENDER_API_KEY не задан!")
         return False
 
     try:
+        import requests as http_requests
+
         subject = f"🛒 Новый заказ #{order_data.get('order_id', '—')} | PCGGPRO"
         body = f"""
         <html>
@@ -174,19 +174,38 @@ def send_order_notification(order_data):
         </html>
         """
 
-        msg = MIMEMultipart()
-        msg['From'] = f"PCGGPRO <{SENDER_EMAIL}>"
-        msg['To'] = ADMIN_EMAIL
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'html'))
+        payload = {
+            "api_key": UNISENDER_API_KEY,
+            "sender_name": SENDER_NAME,
+            "sender_email": SENDER_EMAIL,
+            "recipient_email": ADMIN_EMAIL,
+            "subject": subject,
+            "body": body,
+            "list_id": 1
+        }
 
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=15)
-        server.starttls()
-        server.login(SMTP_EMAIL, SMTP_PASSWORD)
-        server.sendmail(SENDER_EMAIL, ADMIN_EMAIL, msg.as_string())
-        server.quit()
-        logger.info(f"✅ Уведомление о заказе отправлено на {ADMIN_EMAIL}")
-        return True
+        headers = {
+            "Content-Type": "application/json"
+        }
+
+        response = http_requests.post(
+            "https://go.unisender.ru/ru/transactional/api/v1/email/send.json",
+            json=payload,
+            headers=headers,
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("status") == "success":
+                logger.info(f"✅ Уведомление о заказе отправлено на {ADMIN_EMAIL}")
+                return True
+            else:
+                logger.error(f"❌ Ошибка Unisender Go: {result}")
+                return False
+        else:
+            logger.error(f"❌ Ошибка Unisender Go: {response.status_code} - {response.text}")
+            return False
     except Exception as e:
         logger.error(f"❌ Ошибка отправки уведомления: {e}")
         return False
@@ -300,19 +319,33 @@ def get_users():
 # ========== АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ==========
 @app.route('/api/send-verification', methods=['POST'])
 def send_verification_code():
+    """Отправляет код подтверждения на почту."""
     data = request.json
     email = data.get('email', '').strip().lower()
 
     if not email or '@' not in email:
         return jsonify({"status": "error", "message": "Некорректный email"}), 400
 
+    # ✅ НОВАЯ ПРОВЕРКА: если пользователь с такой почтой уже есть — запрещаем
+    try:
+        existing_user = supabase.table('users').select('id').eq('email', email).execute()
+        if existing_user.data and len(existing_user.data) > 0:
+            return jsonify({"status": "error", "message": "Пользователь с такой почтой уже зарегистрирован. Войдите или используйте другую почту."}), 409
+    except Exception as e:
+        logger.error(f"Ошибка проверки существующего пользователя: {e}")
+        # Если произошла ошибка проверки, продолжаем выполнение, чтобы не блокировать регистрацию
+
+    # Генерируем 6-значный код
     code = str(random.randint(100000, 999999))
+    
+    # Сохраняем код
     verification_codes[email] = {
         "code": code,
         "timestamp": time.time(),
         "attempts": 0
     }
 
+    # Отправляем письмо
     subject = "Подтверждение почты | PCGGPRO"
     body = f"""
     <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
