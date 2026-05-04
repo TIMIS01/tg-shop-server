@@ -94,7 +94,7 @@ ADMIN_CSS = '''
     .detail-item { padding: 10px 0; border-bottom: 1px solid #eee; }
     .detail-item strong { display: block; color: #666; font-size: 12px; margin-bottom: 3px; }
     .detail-item span { font-size: 15px; }
-    .image-preview { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .image-preview { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; margin-bottom: 15px; }
     .image-preview img { width: 100px; height: 100px; object-fit: cover; border-radius: 8px; border: 2px solid #eee; }
     .image-preview .img-wrapper { position: relative; display: inline-block; }
     .image-preview .remove-img { position: absolute; top: -5px; right: -5px; background: #e74c3c; color: white; border: none; border-radius: 50%; width: 22px; height: 22px; cursor: pointer; font-size: 12px; }
@@ -327,9 +327,9 @@ def send_verification_code():
     try:
         existing_user = supabase.table('users').select('id').eq('email', email).execute()
         if existing_user.data and len(existing_user.data) > 0:
-            return jsonify({"status": "error", "message": "Пользователь с такой почтой уже зарегистрирован. Войдите или используйте другую почту."}), 409
-    except Exception as e:
-        logger.error(f"Ошибка проверки существующего пользователя: {e}")
+            return jsonify({"status": "error", "message": "Пользователь с такой почтой уже зарегистрирован."}), 409
+    except:
+        pass
 
     code = str(random.randint(100000, 999999))
     verification_codes[email] = {"code": code, "timestamp": time.time(), "attempts": 0}
@@ -340,8 +340,7 @@ def send_verification_code():
         <h2 style="color: #4a9eff;">🖥️ PCGGPRO</h2>
         <p>Ваш код подтверждения:</p>
         <h1 style="letter-spacing: 5px; color: #333;">{code}</h1>
-        <p>Введите этот код на странице регистрации для подтверждения вашей почты.</p>
-        <p style="color: #999; font-size: 12px;">Код действителен в течение 10 минут.</p>
+        <p>Введите этот код на странице регистрации.</p>
     </div>
     """
 
@@ -359,17 +358,17 @@ def verify_email_code():
     if email not in verification_codes:
         return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
 
-    stored_data = verification_codes[email]
-    if time.time() - stored_data["timestamp"] > 600:
+    stored = verification_codes[email]
+    if time.time() - stored["timestamp"] > 600:
         del verification_codes[email]
-        return jsonify({"status": "error", "message": "Код истёк. Запросите новый"}), 400
-    if stored_data["attempts"] >= 3:
+        return jsonify({"status": "error", "message": "Код истёк"}), 400
+    if stored["attempts"] >= 3:
         del verification_codes[email]
-        return jsonify({"status": "error", "message": "Превышено количество попыток. Запросите новый код"}), 400
+        return jsonify({"status": "error", "message": "Превышено количество попыток"}), 400
 
-    stored_data["attempts"] += 1
+    stored["attempts"] += 1
 
-    if stored_data["code"] == code:
+    if stored["code"] == code:
         del verification_codes[email]
         return jsonify({"status": "ok", "message": "Почта подтверждена"})
     else:
@@ -492,9 +491,9 @@ def admin_login_page():
             body {{ font-family: 'Segoe UI', Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; justify-content: center; align-items: center; height: 100vh; }}
             .login-box {{ background: white; padding: 50px; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); width: 400px; }}
             .login-box h2 {{ text-align: center; margin-bottom: 35px; color: #1a1a2e; font-size: 28px; }}
-            .login-box input {{ width: 100%; padding: 15px; margin-bottom: 20px; border: 2px solid #e0e0e0; border-radius: 12px; font-size: 16px; transition: border-color 0.3s; }}
+            .login-box input {{ width: 100%; padding: 15px; margin-bottom: 20px; border: 2px solid #e0e0e0; border-radius: 12px; font-size: 16px; }}
             .login-box input:focus {{ border-color: #667eea; outline: none; }}
-            .login-box button {{ width: 100%; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; transition: transform 0.2s; }}
+            .login-box button {{ width: 100%; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; }}
             .login-box button:hover {{ transform: translateY(-2px); }}
             .error {{ color: #e74c3c; text-align: center; margin-top: 15px; display: none; }}
         </style>
@@ -512,11 +511,7 @@ def admin_login_page():
             document.getElementById('loginForm').addEventListener('submit', async (e) => {{
                 e.preventDefault();
                 const password = document.getElementById('password').value;
-                const response = await fetch('/api/admin/login', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ password: password }})
-                }});
+                const response = await fetch('/api/admin/login', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ password: password }}) }});
                 if (response.ok) {{
                     const data = await response.json();
                     localStorage.setItem('admin_token', data.token);
@@ -564,40 +559,22 @@ def admin_dashboard():
         <div class="content">
             <h1>📊 Дашборд</h1>
             <div class="stats">
-                <div class="stat-card">
-                    <h3 id="productsCount">0</h3>
-                    <p>Товаров в каталоге</p>
-                </div>
-                <div class="stat-card">
-                    <h3 id="ordersCount">0</h3>
-                    <p>Всего заказов</p>
-                </div>
-                <div class="stat-card">
-                    <h3 id="newOrdersCount">0</h3>
-                    <p>Новых заказов</p>
-                </div>
-                <div class="stat-card">
-                    <h3 id="revenueCount">0 ₽</h3>
-                    <p>Выручка</p>
-                </div>
+                <div class="stat-card"><h3 id="productsCount">0</h3><p>Товаров в каталоге</p></div>
+                <div class="stat-card"><h3 id="ordersCount">0</h3><p>Всего заказов</p></div>
+                <div class="stat-card"><h3 id="newOrdersCount">0</h3><p>Новых заказов</p></div>
+                <div class="stat-card"><h3 id="revenueCount">0 ₽</h3><p>Выручка</p></div>
             </div>
         </div>
         <script>
             async function loadStats() {{
-                const productsRes = await fetch('/api/products');
-                const productsData = await productsRes.json();
+                const productsRes = await fetch('/api/products'); const productsData = await productsRes.json();
                 document.getElementById('productsCount').textContent = productsData.products?.length || 0;
-                
-                const ordersRes = await fetch('/api/orders');
-                const ordersData = await ordersRes.json();
+                const ordersRes = await fetch('/api/orders'); const ordersData = await ordersRes.json();
                 const orders = ordersData.orders || [];
                 document.getElementById('ordersCount').textContent = orders.length;
                 document.getElementById('newOrdersCount').textContent = orders.filter(o => o.status === 'оформлен').length;
-                
-                const totalRevenue = orders.reduce((sum, o) => sum + (o.total_price || 0), 0);
-                document.getElementById('revenueCount').textContent = totalRevenue.toLocaleString() + ' ₽';
+                document.getElementById('revenueCount').textContent = orders.reduce((sum, o) => sum + (o.total_price || 0), 0).toLocaleString() + ' ₽';
             }}
-            
             function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
             loadStats();
         </script>
@@ -632,9 +609,7 @@ def admin_products():
             <button class="btn btn-success" onclick="openAddModal()" style="margin-bottom: 25px;">+ Добавить товар</button>
             <div class="card">
                 <table id="productsTable">
-                    <thead>
-                        <tr><th>ID</th><th>Название</th><th>Цена</th><th>Характеристики</th><th>Действия</th></tr>
-                    </thead>
+                    <thead><tr><th>ID</th><th>Название</th><th>Цена</th><th>Характеристики</th><th>Действия</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
@@ -645,10 +620,8 @@ def admin_products():
                 <h2 id="modalTitle">Добавить товар</h2>
                 <form id="productForm" enctype="multipart/form-data">
                     <input type="hidden" id="productId">
-                    <label>Название</label>
-                    <input type="text" id="name" required>
-                    <label>Цена (₽)</label>
-                    <input type="number" id="price" required>
+                    <label>Название</label><input type="text" id="name" required>
+                    <label>Цена (₽)</label><input type="number" id="price" required>
                     <div class="detail-grid">
                         <div><label>Процессор</label><input type="text" id="cpu"></div>
                         <div><label>Видеокарта</label><input type="text" id="gpu"></div>
@@ -656,13 +629,12 @@ def admin_products():
                         <div><label>Накопитель</label><input type="text" id="storage"></div>
                         <div><label>Блок питания</label><input type="text" id="psu"></div>
                     </div>
-                    <label>Описание</label>
-                    <textarea id="description" rows="4"></textarea>
+                    <label>Описание</label><textarea id="description" rows="4"></textarea>
                     
-                    <label>🖼️ Картинки товара (до 5 штук)</label>
+                    <label>🖼️ Картинки товара (до 5 штук) — сжимаются автоматически</label>
                     <input type="file" id="imageFiles" accept="image/*" multiple onchange="previewImages()" style="margin-bottom: 10px;">
                     <div class="image-preview" id="imagePreview"></div>
-                    <p style="font-size: 11px; color: #999; margin-top: 5px;">Выберите до 5 картинок с компьютера. Они будут загружены при сохранении товара.</p>
+                    <p style="font-size: 11px; color: #999;">Картинки будут сжаты до безопасного размера перед сохранением.</p>
                     
                     <div style="margin-top: 20px; display: flex; gap: 10px;">
                         <button type="button" class="btn btn-primary" onclick="saveProduct()">Сохранить</button>
@@ -676,14 +648,11 @@ def admin_products():
             let selectedImages = [];
             
             async function loadProducts() {{
-                const response = await fetch('/api/products');
-                const data = await response.json();
+                const response = await fetch('/api/products'); const data = await response.json();
                 const tbody = document.querySelector('#productsTable tbody');
                 tbody.innerHTML = (data.products || []).map(p => `
                     <tr>
-                        <td>${{p.id}}</td>
-                        <td><strong>${{p.name}}</strong></td>
-                        <td>${{p.price.toLocaleString()}} ₽</td>
+                        <td>${{p.id}}</td><td><strong>${{p.name}}</strong></td><td>${{p.price.toLocaleString()}} ₽</td>
                         <td><small>${{[p.cpu, p.gpu, p.ram].filter(Boolean).join(' / ') || '—'}}</small></td>
                         <td>
                             <button class="btn btn-primary" onclick="editProduct(${{p.id}})">✏️</button>
@@ -693,14 +662,7 @@ def admin_products():
                 `).join('');
             }}
             
-            function openAddModal() {{ 
-                editingId = null; 
-                selectedImages = [];
-                document.getElementById('modalTitle').textContent = 'Добавить товар'; 
-                document.getElementById('productForm').reset(); 
-                document.getElementById('imagePreview').innerHTML = '';
-                document.getElementById('productModal').style.display = 'flex'; 
-            }}
+            function openAddModal() {{ editingId = null; selectedImages = []; document.getElementById('modalTitle').textContent = 'Добавить товар'; document.getElementById('productForm').reset(); document.getElementById('imagePreview').innerHTML = ''; document.getElementById('productModal').style.display = 'flex'; }}
             function closeModal() {{ document.getElementById('productModal').style.display = 'none'; }}
             
             function previewImages() {{
@@ -709,27 +671,16 @@ def admin_products():
                 const preview = document.getElementById('imagePreview');
                 preview.innerHTML = selectedImages.map((file, i) => {{
                     const url = URL.createObjectURL(file);
-                    return `<div class="img-wrapper">
-                        <img src="${{url}}" alt="Preview">
-                        <button class="remove-img" onclick="removeImage(${{i}})">×</button>
-                    </div>`;
+                    return `<div class="img-wrapper"><img src="${{url}}"><button class="remove-img" onclick="removeImage(${{i}})">×</button></div>`;
                 }}).join('');
             }}
             
-            function removeImage(index) {{
-                selectedImages.splice(index, 1);
-                const dt = new DataTransfer();
-                selectedImages.forEach(f => dt.items.add(f));
-                document.getElementById('imageFiles').files = dt.files;
-                previewImages();
-            }}
+            function removeImage(index) {{ selectedImages.splice(index, 1); const dt = new DataTransfer(); selectedImages.forEach(f => dt.items.add(f)); document.getElementById('imageFiles').files = dt.files; previewImages(); }}
             
             async function editProduct(id) {{
-                editingId = id;
-                selectedImages = [];
+                editingId = id; selectedImages = [];
                 document.getElementById('modalTitle').textContent = 'Редактировать товар';
-                const response = await fetch('/api/products');
-                const data = await response.json();
+                const response = await fetch('/api/products'); const data = await response.json();
                 const product = (data.products || []).find(p => p.id === id);
                 if (product) {{
                     document.getElementById('productId').value = product.id;
@@ -748,39 +699,45 @@ def admin_products():
             }}
             
             async function deleteProduct(id) {{
-                if (confirm('Удалить товар навсегда?')) {{
-                    await fetch(`/api/products/${{id}}`, {{ method: 'DELETE' }});
-                    loadProducts();
-                }}
+                if (confirm('Удалить товар навсегда?')) {{ await fetch(`/api/products/${{id}}`, {{ method: 'DELETE' }}); loadProducts(); }}
+            }}
+            
+            function compressImage(file, maxWidth, maxHeight, quality) {{
+                return new Promise((resolve) => {{
+                    const reader = new FileReader();
+                    reader.onload = (e) => {{
+                        const img = new Image();
+                        img.onload = () => {{
+                            let width = img.width, height = img.height;
+                            if (width > maxWidth) {{ height = (maxWidth / width) * height; width = maxWidth; }}
+                            if (height > maxHeight) {{ width = (maxHeight / height) * width; height = maxHeight; }}
+                            const canvas = document.createElement('canvas');
+                            canvas.width = width; canvas.height = height;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0, width, height);
+                            resolve(canvas.toDataURL('image/jpeg', quality));
+                        }};
+                        img.src = e.target.result;
+                    }};
+                    reader.readAsDataURL(file);
+                }});
             }}
             
             async function saveProduct() {{
                 const name = document.getElementById('name').value.trim();
                 const price = document.getElementById('price').value.trim();
-                
-                if (!name || !price) {{
-                    alert('Заполните название и цену!');
-                    return;
-                }}
+                if (!name || !price) {{ alert('Заполните название и цену!'); return; }}
                 
                 const btn = event.target;
-                btn.textContent = '⏳ Сохранение...';
+                btn.textContent = '⏳ Сжатие и сохранение...';
                 btn.disabled = true;
                 
-                // Конвертируем выбранные картинки в base64
-                const imagePromises = selectedImages.map(file => {{
-                    return new Promise((resolve) => {{
-                        const reader = new FileReader();
-                        reader.onload = (e) => resolve(e.target.result);
-                        reader.readAsDataURL(file);
-                    }});
-                }});
-                
+                // Сжимаем картинки перед отправкой
+                const imagePromises = selectedImages.map(file => compressImage(file, 800, 800, 0.6));
                 const images = await Promise.all(imagePromises);
                 
                 const productData = {{
-                    name: name,
-                    price: parseInt(price),
+                    name: name, price: parseInt(price),
                     cpu: document.getElementById('cpu').value,
                     gpu: document.getElementById('gpu').value,
                     ram: document.getElementById('ram').value,
@@ -796,10 +753,8 @@ def admin_products():
                     await fetch('/api/products', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify(productData) }});
                 }}
                 
-                btn.textContent = 'Сохранить';
-                btn.disabled = false;
-                closeModal();
-                loadProducts();
+                btn.textContent = 'Сохранить'; btn.disabled = false;
+                closeModal(); loadProducts();
             }}
             
             function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
@@ -814,137 +769,44 @@ def admin_orders():
     return f'''
     <!DOCTYPE html>
     <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Заказы | Админ-панель</title>
-        {ADMIN_CSS}
-    </head>
+    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Заказы | Админ-панель</title>{ADMIN_CSS}</head>
     <body>
         <div class="sidebar">
             <h2>🖥️ PC Shop</h2>
-            <a href="/admin/dashboard">📊 Дашборд</a>
-            <a href="/admin/products">📦 Товары</a>
-            <a href="/admin/orders" class="active">🛒 Заказы</a>
-            <a href="/admin/users">👥 Пользователи</a>
-            <a href="/admin/support">💬 Поддержка</a>
-            <a href="/admin/chats">💬 Чаты</a>
+            <a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a>
+            <a href="/admin/orders" class="active">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a>
+            <a href="/admin/support">💬 Поддержка</a><a href="/admin/chats">💬 Чаты</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
-        <div class="content">
-            <h1>🛒 Заказы</h1>
-            <div class="card">
-                <table id="ordersTable">
-                    <thead>
-                        <tr><th>ID</th><th>Клиент</th><th>Email</th><th>Товар</th><th>Сумма</th><th>Город</th><th>Статус</th><th>Дата</th><th>Действия</th></tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
-        
-        <div class="modal" id="orderModal">
-            <div class="modal-content">
-                <h2>Детали заказа</h2>
-                <div id="orderDetails"></div>
-                <div style="margin-top: 20px;">
-                    <label>Изменить статус</label>
-                    <select id="orderStatus" style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px;">
-                        <option value="оформлен">Оформлен</option>
-                        <option value="принят">Принят</option>
-                        <option value="в сборке">В сборке</option>
-                        <option value="отправлен">Отправлен</option>
-                        <option value="доставлен">Доставлен</option>
-                        <option value="отменён">Отменён</option>
-                    </select>
-                    <label style="margin-top: 15px;">Трек-номер</label>
-                    <input type="text" id="trackingNumber" placeholder="Введите трек-номер">
-                    <div style="margin-top: 15px; display: flex; gap: 10px;">
-                        <button class="btn btn-primary" onclick="saveOrderStatus()">Сохранить</button>
-                        <button class="btn btn-danger" onclick="closeModal()">Закрыть</button>
-                    </div>
-                </div>
-            </div>
-        </div>
+        <div class="content"><h1>🛒 Заказы</h1><div class="card"><table id="ordersTable"><thead><tr><th>ID</th><th>Клиент</th><th>Email</th><th>Товар</th><th>Сумма</th><th>Город</th><th>Статус</th><th>Дата</th><th>Действия</th></tr></thead><tbody></tbody></table></div></div>
+        <div class="modal" id="orderModal"><div class="modal-content"><h2>Детали заказа</h2><div id="orderDetails"></div><div style="margin-top: 20px;"><label>Изменить статус</label><select id="orderStatus" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;"><option value="оформлен">Оформлен</option><option value="принят">Принят</option><option value="в сборке">В сборке</option><option value="отправлен">Отправлен</option><option value="доставлен">Доставлен</option><option value="отменён">Отменён</option></select><label style="margin-top:15px;">Трек-номер</label><input type="text" id="trackingNumber" placeholder="Введите трек-номер"><div style="margin-top:15px;display:flex;gap:10px;"><button class="btn btn-primary" onclick="saveOrderStatus()">Сохранить</button><button class="btn btn-danger" onclick="closeModal()">Закрыть</button></div></div></div></div>
         <script>
             let currentOrderId = null;
-            
             async function loadOrders() {{
-                const response = await fetch('/api/orders');
-                const data = await response.json();
+                const response = await fetch('/api/orders'); const data = await response.json();
                 const tbody = document.querySelector('#ordersTable tbody');
-                const statusBadges = {{
-                    'оформлен': 'badge-info',
-                    'принят': 'badge-warning',
-                    'в сборке': 'badge-warning',
-                    'отправлен': 'badge-primary',
-                    'доставлен': 'badge-success',
-                    'отменён': 'badge-danger'
-                }};
-                
-                tbody.innerHTML = (data.orders || []).map(o => {{
-                    const date = new Date(o.created_at || o.order_date);
-                    const dateStr = date.toLocaleString('ru-RU', {{ day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }});
-                    return `
-                        <tr>
-                            <td>#${{o.id}}</td>
-                            <td><strong>${{o.full_name || o.username || '—'}}</strong></td>
-                            <td>${{o.user_email || '—'}}</td>
-                            <td>${{o.product_name || '—'}}</td>
-                            <td>${{(o.total_price || 0).toLocaleString()}} ₽</td>
-                            <td>${{o.city || '—'}}</td>
-                            <td><span class="badge ${{statusBadges[o.status] || 'badge-info'}}">${{o.status || 'оформлен'}}</span></td>
-                            <td>${{dateStr}}</td>
-                            <td><button class="btn btn-info" onclick="viewOrder(${{o.id}})">👁️</button></td>
-                        </tr>
-                    `;
-                }}).join('');
+                const badges = {{'оформлен':'badge-info','принят':'badge-warning','в сборке':'badge-warning','отправлен':'badge-primary','доставлен':'badge-success','отменён':'badge-danger'}};
+                tbody.innerHTML = (data.orders || []).map(o => {{ const d = new Date(o.created_at||o.order_date); return `<tr><td>#${{o.id}}</td><td><strong>${{o.full_name||o.username||'—'}}</strong></td><td>${{o.user_email||'—'}}</td><td>${{o.product_name||'—'}}</td><td>${{(o.total_price||0).toLocaleString()}} ₽</td><td>${{o.city||'—'}}</td><td><span class="badge ${{badges[o.status]||'badge-info'}}">${{o.status||'оформлен'}}</span></td><td>${{d.toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="viewOrder(${{o.id}})">👁️</button></td></tr>`; }}).join('');
             }}
-            
             async function viewOrder(id) {{
                 currentOrderId = id;
-                const response = await fetch('/api/orders');
-                const data = await response.json();
-                const order = (data.orders || []).find(o => o.id === id);
-                if (order) {{
-                    document.getElementById('orderStatus').value = order.status || 'оформлен';
-                    document.getElementById('trackingNumber').value = order.tracking_number || '';
-                    document.getElementById('orderDetails').innerHTML = `
-                        <div class="detail-grid">
-                            <div class="detail-item"><strong>Клиент</strong><span>${{order.full_name || order.username || '—'}}</span></div>
-                            <div class="detail-item"><strong>Email</strong><span>${{order.user_email || '—'}}</span></div>
-                            <div class="detail-item"><strong>Telegram</strong><span>${{order.telegram || '—'}}</span></div>
-                            <div class="detail-item"><strong>Товар</strong><span>${{order.product_name || '—'}}</span></div>
-                            <div class="detail-item"><strong>Количество</strong><span>${{order.quantity || 1}}</span></div>
-                            <div class="detail-item"><strong>Цена</strong><span>${{(order.total_price || 0).toLocaleString()}} ₽</span></div>
-                            <div class="detail-item"><strong>Город</strong><span>${{order.city || '—'}}</span></div>
-                            <div class="detail-item"><strong>Почтовое отделение</strong><span>${{order.postal || '—'}}</span></div>
-                            <div class="detail-item"><strong>Комментарий</strong><span>${{order.comment || '—'}}</span></div>
-                            <div class="detail-item"><strong>Статус</strong><span>${{order.status || 'оформлен'}}</span></div>
-                            <div class="detail-item"><strong>Трек-номер</strong><span>${{order.tracking_number || '—'}}</span></div>
-                            <div class="detail-item"><strong>Дата</strong><span>${{new Date(order.created_at || order.order_date).toLocaleString('ru-RU')}}</span></div>
-                        </div>
-                    `;
+                const response = await fetch('/api/orders'); const data = await response.json();
+                const order = (data.orders||[]).find(o=>o.id===id);
+                if(order) {{
+                    document.getElementById('orderStatus').value = order.status||'оформлен';
+                    document.getElementById('trackingNumber').value = order.tracking_number||'';
+                    document.getElementById('orderDetails').innerHTML = `<div class="detail-grid"><div class="detail-item"><strong>Клиент</strong><span>${{order.full_name||order.username||'—'}}</span></div><div class="detail-item"><strong>Email</strong><span>${{order.user_email||'—'}}</span></div><div class="detail-item"><strong>Telegram</strong><span>${{order.telegram||'—'}}</span></div><div class="detail-item"><strong>Товар</strong><span>${{order.product_name||'—'}}</span></div><div class="detail-item"><strong>Цена</strong><span>${{(order.total_price||0).toLocaleString()}} ₽</span></div><div class="detail-item"><strong>Город</strong><span>${{order.city||'—'}}</span></div><div class="detail-item"><strong>Статус</strong><span>${{order.status||'оформлен'}}</span></div><div class="detail-item"><strong>Трек-номер</strong><span>${{order.tracking_number||'—'}}</span></div><div class="detail-item"><strong>Дата</strong><span>${{new Date(order.created_at||order.order_date).toLocaleString('ru-RU')}}</span></div></div>`;
                     document.getElementById('orderModal').style.display = 'flex';
                 }}
             }}
-            
             async function saveOrderStatus() {{
-                if (currentOrderId) {{
-                    const newStatus = document.getElementById('orderStatus').value;
-                    const trackingNumber = document.getElementById('trackingNumber').value.trim();
-                    await fetch(`/api/orders/${{currentOrderId}}/status`, {{
-                        method: 'PUT',
-                        headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ status: newStatus, tracking_number: trackingNumber }})
-                    }});
-                    closeModal();
-                    loadOrders();
+                if(currentOrderId) {{
+                    await fetch(`/api/orders/${{currentOrderId}}/status`, {{ method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{ status:document.getElementById('orderStatus').value, tracking_number:document.getElementById('trackingNumber').value.trim() }}) }});
+                    closeModal(); loadOrders();
                 }}
             }}
-            
-            function closeModal() {{ document.getElementById('orderModal').style.display = 'none'; }}
-            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
+            function closeModal() {{ document.getElementById('orderModal').style.display='none'; }}
+            function logout() {{ localStorage.removeItem('admin_token'); window.location.href='/admin'; }}
             loadOrders();
         </script>
     </body>
@@ -956,60 +818,24 @@ def admin_users():
     return f'''
     <!DOCTYPE html>
     <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Пользователи | Админ-панель</title>
-        {ADMIN_CSS}
-    </head>
+    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Пользователи | Админ-панель</title>{ADMIN_CSS}</head>
     <body>
         <div class="sidebar">
             <h2>🖥️ PC Shop</h2>
-            <a href="/admin/dashboard">📊 Дашборд</a>
-            <a href="/admin/products">📦 Товары</a>
-            <a href="/admin/orders">🛒 Заказы</a>
-            <a href="/admin/users" class="active">👥 Пользователи</a>
+            <a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a>
+            <a href="/admin/orders">🛒 Заказы</a><a href="/admin/users" class="active">👥 Пользователи</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
-        <div class="content">
-            <h1>👥 Пользователи</h1>
-            <div class="card">
-                <table id="usersTable">
-                    <thead>
-                        <tr><th>ID</th><th>Имя</th><th>Email</th><th>Город</th><th>Заказов</th><th>Дата регистрации</th></tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
+        <div class="content"><h1>👥 Пользователи</h1><div class="card"><table id="usersTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Город</th><th>Заказов</th><th>Дата регистрации</th></tr></thead><tbody></tbody></table></div></div>
         <script>
             async function loadUsers() {{
-                const response = await fetch('/api/users');
-                const data = await response.json();
-                const tbody = document.querySelector('#usersTable tbody');
-                
-                const ordersRes = await fetch('/api/orders');
-                const ordersData = await ordersRes.json();
+                const response = await fetch('/api/users'); const data = await response.json();
+                const ordersRes = await fetch('/api/orders'); const ordersData = await ordersRes.json();
                 const orders = ordersData.orders || [];
-                
-                tbody.innerHTML = (data.users || []).map(u => {{
-                    const userOrders = orders.filter(o => o.user_email == u.email);
-                    const date = new Date(u.created_at);
-                    const dateStr = date.toLocaleString('ru-RU', {{ day: 'numeric', month: 'short', year: 'numeric' }});
-                    return `
-                        <tr>
-                            <td>${{u.id}}</td>
-                            <td><strong>${{u.full_name || '—'}}</strong></td>
-                            <td>${{u.email || '—'}}</td>
-                            <td>${{u.city || '—'}}</td>
-                            <td><span class="badge badge-info">${{userOrders.length}}</span></td>
-                            <td>${{dateStr}}</td>
-                        </tr>
-                    `;
-                }}).join('');
+                const tbody = document.querySelector('#usersTable tbody');
+                tbody.innerHTML = (data.users || []).map(u => {{ const d = new Date(u.created_at); return `<tr><td>${{u.id}}</td><td><strong>${{u.full_name||'—'}}</strong></td><td>${{u.email||'—'}}</td><td>${{u.city||'—'}}</td><td><span class="badge badge-info">${{orders.filter(o=>o.user_email==u.email).length}}</span></td><td>${{d.toLocaleString('ru-RU')}}</td></tr>`; }}).join('');
             }}
-            
-            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
+            function logout() {{ localStorage.removeItem('admin_token'); window.location.href='/admin'; }}
             loadUsers();
         </script>
     </body>
@@ -1023,173 +849,76 @@ reset_tokens = {}
 def forgot_password():
     data = request.json
     email = data.get('email', '').strip().lower()
-    if not email or '@' not in email:
-        return jsonify({"status": "error", "message": "Некорректный email"}), 400
+    if not email or '@' not in email: return jsonify({"status":"error","message":"Некорректный email"}), 400
     try:
-        existing = supabase.table('users').select('id').eq('email', email).execute()
-        if not existing.data:
-            return jsonify({"status": "ok", "message": "Если такой email зарегистрирован, код отправлен"}), 200
-    except:
-        return jsonify({"status": "error", "message": "Ошибка сервера"}), 500
+        if not supabase.table('users').select('id').eq('email', email).execute().data:
+            return jsonify({"status":"ok","message":"Если такой email зарегистрирован, код отправлен"}), 200
+    except: return jsonify({"status":"error","message":"Ошибка сервера"}), 500
 
     code = str(random.randint(100000, 999999))
     reset_token = hashlib.sha256(f"{SECRET_KEY}{email}{time.time()}".encode()).hexdigest()
-    reset_tokens[email] = {"code": code, "token": reset_token, "timestamp": time.time(), "attempts": 0}
+    reset_tokens[email] = {"code":code,"token":reset_token,"timestamp":time.time(),"attempts":0}
 
-    subject = "Восстановление пароля | PCGGPRO"
-    body = f"""
-    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-        <h2 style="color: #4a9eff;">🖥️ PCGGPRO</h2>
-        <p>Ваш код для восстановления пароля:</p>
-        <h1 style="letter-spacing: 5px; color: #333;">{code}</h1>
-        <p>Введите этот код на странице восстановления пароля.</p>
-        <p style="color: #999; font-size: 12px;">Код действителен в течение 10 минут.</p>
-    </div>
-    """
-    if send_email(email, subject, body):
-        return jsonify({"status": "ok", "reset_token": reset_token})
+    if send_email(email, "Восстановление пароля | PCGGPRO", f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;"><h2 style="color:#4a9eff;">🖥️ PCGGPRO</h2><p>Ваш код для восстановления пароля:</p><h1 style="letter-spacing:5px;color:#333;">{code}</h1></div>"""):
+        return jsonify({"status":"ok","reset_token":reset_token})
     else:
-        return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
+        return jsonify({"status":"error","message":"Не удалось отправить код"}), 500
 
 @app.route('/api/verify-reset-code', methods=['POST'])
 def verify_reset_code():
     data = request.json
-    email = data.get('email', '').strip().lower()
-    code = data.get('code', '').strip()
-    token = data.get('reset_token', '').strip()
-    if email not in reset_tokens:
-        return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
+    email, code, token = data.get('email','').strip().lower(), data.get('code','').strip(), data.get('reset_token','').strip()
+    if email not in reset_tokens: return jsonify({"status":"error","message":"Код не найден или истёк"}), 400
     stored = reset_tokens[email]
-    if stored["token"] != token:
-        return jsonify({"status": "error", "message": "Неверный токен"}), 400
-    if time.time() - stored["timestamp"] > 600:
-        del reset_tokens[email]
-        return jsonify({"status": "error", "message": "Код истёк. Запросите новый"}), 400
-    if stored["attempts"] >= 3:
-        del reset_tokens[email]
-        return jsonify({"status": "error", "message": "Превышено количество попыток"}), 400
+    if stored["token"] != token: return jsonify({"status":"error","message":"Неверный токен"}), 400
+    if time.time() - stored["timestamp"] > 600: del reset_tokens[email]; return jsonify({"status":"error","message":"Код истёк"}), 400
+    if stored["attempts"] >= 3: del reset_tokens[email]; return jsonify({"status":"error","message":"Превышено количество попыток"}), 400
     stored["attempts"] += 1
-    if stored["code"] == code:
-        return jsonify({"status": "ok", "message": "Код подтверждён"})
-    else:
-        return jsonify({"status": "error", "message": "Неверный код"}), 400
+    if stored["code"] == code: return jsonify({"status":"ok","message":"Код подтверждён"})
+    else: return jsonify({"status":"error","message":"Неверный код"}), 400
 
 @app.route('/api/reset-password', methods=['POST'])
 def reset_password():
     data = request.json
-    email = data.get('email', '').strip().lower()
-    password = data.get('password', '')
-    token = data.get('reset_token', '')
-    if email not in reset_tokens:
-        return jsonify({"status": "error", "message": "Токен не найден или истёк"}), 400
-    stored = reset_tokens[email]
-    if stored["token"] != token:
-        return jsonify({"status": "error", "message": "Неверный токен"}), 400
-    if len(password) < 6:
-        return jsonify({"status": "error", "message": "Пароль должен быть не менее 6 символов"}), 400
+    email, password, token = data.get('email','').strip().lower(), data.get('password',''), data.get('reset_token','')
+    if email not in reset_tokens: return jsonify({"status":"error","message":"Токен не найден или истёк"}), 400
+    if reset_tokens[email]["token"] != token: return jsonify({"status":"error","message":"Неверный токен"}), 400
+    if len(password) < 6: return jsonify({"status":"error","message":"Пароль должен быть не менее 6 символов"}), 400
     try:
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        supabase.table('users').update({'password_hash': password_hash}).eq('email', email).execute()
+        supabase.table('users').update({'password_hash': hashlib.sha256(password.encode()).hexdigest()}).eq('email', email).execute()
         del reset_tokens[email]
-        return jsonify({"status": "ok", "message": "Пароль изменён"})
-    except Exception as e:
-        logger.error(f"Ошибка смены пароля: {e}")
-        return jsonify({"status": "error", "message": "Ошибка смены пароля"}), 500
+        return jsonify({"status":"ok","message":"Пароль изменён"})
+    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
 
 # ========== ПОДДЕРЖКА ==========
 @app.route('/api/support', methods=['POST'])
 def support_message():
     data = request.json
     try:
-        supabase.table('support_messages').insert({
-            'name': data.get('name', ''),
-            'email': data.get('email', ''),
-            'message': data.get('message', ''),
-            'status': 'новое',
-            'created_at': datetime.now().isoformat()
-        }).execute()
-        notification_data = {
-            "order_id": f"SUPPORT-{datetime.now().strftime('%H%M%S')}",
-            "product_name": f"Запрос от {data.get('name', '—')} ({data.get('email', '—')})",
-            "price": 0,
-            "city": "Поддержка",
-            "postal": data.get('message', ''),
-            "comment": '',
-            "timestamp": datetime.now().strftime("%d.%m.%Y %H:%M")
-        }
-        send_order_notification(notification_data)
-        return jsonify({"status": "ok", "message": "Сообщение отправлено"}), 200
-    except Exception as e:
-        logger.error(f"Ошибка сохранения обращения: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        supabase.table('support_messages').insert({'name':data.get('name',''),'email':data.get('email',''),'message':data.get('message',''),'status':'новое','created_at':datetime.now().isoformat()}).execute()
+        send_order_notification({"order_id":f"SUPPORT-{datetime.now().strftime('%H%M%S')}","product_name":f"Запрос от {data.get('name','—')}","price":0,"city":"Поддержка","postal":data.get('message',''),"comment":"","timestamp":datetime.now().strftime("%d.%m.%Y %H:%M")})
+        return jsonify({"status":"ok"}), 200
+    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
 
 @app.route('/api/support', methods=['GET'])
 def get_support_messages():
-    try:
-        response = supabase.table('support_messages').select('*').order('created_at', desc=True).execute()
-        return jsonify({"status": "ok", "messages": response.data})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    try: return jsonify({"status":"ok","messages":supabase.table('support_messages').select('*').order('created_at', desc=True).execute().data}), 200
+    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
 
 @app.route('/admin/support')
 def admin_support():
     return f'''
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Поддержка | Админ-панель</title>
-        {ADMIN_CSS}
-    </head>
-    <body>
-        <div class="sidebar">
-            <h2>🖥️ PC Shop</h2>
-            <a href="/admin/dashboard">📊 Дашборд</a>
-            <a href="/admin/products">📦 Товары</a>
-            <a href="/admin/orders">🛒 Заказы</a>
-            <a href="/admin/users">👥 Пользователи</a>
-            <a href="/admin/support" class="active">💬 Поддержка</a>
-            <a href="/admin/chats">💬 Чаты</a>
-            <a href="#" onclick="logout()">🚪 Выйти</a>
-        </div>
-        <div class="content">
-            <h1>💬 Запросы в поддержку</h1>
-            <div class="card">
-                <table id="supportTable">
-                    <thead>
-                        <tr><th>ID</th><th>Имя</th><th>Email</th><th>Сообщение</th><th>Статус</th><th>Дата</th></tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
-        <script>
-            async function loadMessages() {{
-                const response = await fetch('/api/support');
-                const data = await response.json();
-                const tbody = document.querySelector('#supportTable tbody');
-                const statusBadges = {{ 'новое': 'badge-info', 'отвечено': 'badge-success' }};
-                tbody.innerHTML = (data.messages || []).map(m => {{
-                    const date = new Date(m.created_at);
-                    return `
-                        <tr>
-                            <td>${{m.id}}</td>
-                            <td><strong>${{m.name || '—'}}</strong></td>
-                            <td>${{m.email || '—'}}</td>
-                            <td>${{m.message || '—'}}</td>
-                            <td><span class="badge ${{statusBadges[m.status] || 'badge-info'}}">${{m.status || 'новое'}}</span></td>
-                            <td>${{date.toLocaleString('ru-RU')}}</td>
-                        </tr>
-                    `;
-                }}).join('');
-            }}
-            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
-            loadMessages();
-        </script>
-    </body>
-    </html>
-    '''
+    <!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Поддержка | Админ-панель</title>{ADMIN_CSS}</head>
+    <body><div class="sidebar"><h2>🖥️ PC Shop</h2><a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a><a href="/admin/orders">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a><a href="/admin/support" class="active">💬 Поддержка</a><a href="/admin/chats">💬 Чаты</a><a href="#" onclick="logout()">🚪 Выйти</a></div>
+    <div class="content"><h1>💬 Запросы в поддержку</h1><div class="card"><table id="supportTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Сообщение</th><th>Статус</th><th>Дата</th></tr></thead><tbody></tbody></table></div></div>
+    <script>
+        async function loadMessages() {{
+            const response = await fetch('/api/support'); const data = await response.json();
+            document.querySelector('#supportTable tbody').innerHTML = (data.messages||[]).map(m => `<tr><td>${{m.id}}</td><td><strong>${{m.name||'—'}}</strong></td><td>${{m.email||'—'}}</td><td>${{m.message||'—'}}</td><td><span class="badge badge-info">${{m.status||'новое'}}</span></td><td>${{new Date(m.created_at).toLocaleString('ru-RU')}}</td></tr>`).join('');
+        }}
+        function logout(){{localStorage.removeItem('admin_token');window.location.href='/admin';}}
+        loadMessages();
+    </script></body></html>'''
 
 # ========== ЧАТ ПОДДЕРЖКИ ==========
 import uuid
@@ -1199,138 +928,61 @@ def start_chat():
     data = request.json
     session_id = str(uuid.uuid4())
     try:
-        supabase.table('chat_sessions').insert({
-            'id': session_id, 'name': data.get('name', ''), 'email': data.get('email', ''),
-            'status': 'active', 'created_at': datetime.now().isoformat()
-        }).execute()
-        supabase.table('chat_messages').insert({
-            'session_id': session_id, 'sender': 'system',
-            'message': f'Чат начат пользователем {data.get("name", "")} ({data.get("email", "")})',
-            'created_at': datetime.now().isoformat()
-        }).execute()
-        return jsonify({"status": "ok", "session_id": session_id}), 200
-    except Exception as e:
-        logger.error(f"Ошибка создания чата: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        supabase.table('chat_sessions').insert({'id':session_id,'name':data.get('name',''),'email':data.get('email',''),'status':'active','created_at':datetime.now().isoformat()}).execute()
+        supabase.table('chat_messages').insert({'session_id':session_id,'sender':'system','message':f'Чат начат пользователем {data.get("name","")}','created_at':datetime.now().isoformat()}).execute()
+        return jsonify({"status":"ok","session_id":session_id}), 200
+    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
 
 @app.route('/api/chat/message', methods=['POST'])
 def chat_message():
     data = request.json
     try:
-        supabase.table('chat_messages').insert({
-            'session_id': data.get('session_id', ''), 'sender': data.get('sender', 'user'),
-            'message': data.get('message', ''), 'created_at': datetime.now().isoformat()
-        }).execute()
-        return jsonify({"status": "ok"}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        supabase.table('chat_messages').insert({'session_id':data.get('session_id',''),'sender':data.get('sender','user'),'message':data.get('message',''),'created_at':datetime.now().isoformat()}).execute()
+        return jsonify({"status":"ok"}), 200
+    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
 
 @app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
-    session_id = request.args.get('session_id', '')
-    try:
-        response = supabase.table('chat_messages').select('*').eq('session_id', session_id).order('created_at', asc=True).execute()
-        return jsonify({"status": "ok", "messages": response.data}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    try: return jsonify({"status":"ok","messages":supabase.table('chat_messages').select('*').eq('session_id', request.args.get('session_id','')).order('created_at', asc=True).execute().data}), 200
+    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
 
 @app.route('/api/chat/sessions', methods=['GET'])
 def get_chat_sessions():
-    try:
-        response = supabase.table('chat_sessions').select('*').eq('status', 'active').order('created_at', desc=True).execute()
-        return jsonify({"status": "ok", "sessions": response.data}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    try: return jsonify({"status":"ok","sessions":supabase.table('chat_sessions').select('*').eq('status','active').order('created_at', desc=True).execute().data}), 200
+    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
 
 @app.route('/admin/chats')
 def admin_chats():
     return f'''
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Чаты | Админ-панель</title>
-        {ADMIN_CSS}
-    </head>
-    <body>
-        <div class="sidebar">
-            <h2>🖥️ PC Shop</h2>
-            <a href="/admin/dashboard">📊 Дашборд</a>
-            <a href="/admin/products">📦 Товары</a>
-            <a href="/admin/orders">🛒 Заказы</a>
-            <a href="/admin/users">👥 Пользователи</a>
-            <a href="/admin/support">💬 Поддержка</a>
-            <a href="/admin/chats" class="active">💬 Чаты</a>
-            <a href="#" onclick="logout()">🚪 Выйти</a>
-        </div>
-        <div class="content">
-            <h1>💬 Активные чаты</h1>
-            <div class="card">
-                <table id="sessionsTable">
-                    <thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Дата</th><th>Действия</th></tr></thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
-        <div class="modal" id="chatModal">
-            <div class="modal-content" style="width: 500px;">
-                <h2>Чат с клиентом</h2>
-                <div id="chatMessagesBox" style="height: 300px; overflow-y: auto; padding: 10px; background: #f5f5f5; border-radius: 8px; margin-bottom: 15px;"></div>
-                <div style="display: flex; gap: 10px;">
-                    <input type="text" id="adminChatInput" placeholder="Ваш ответ..." style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
-                    <button class="btn btn-primary" onclick="sendAdminMessage()">Отправить</button>
-                </div>
-                <button class="btn btn-danger" onclick="closeModal()" style="margin-top: 10px;">Закрыть</button>
-            </div>
-        </div>
-        <script>
-            let currentSessionId = null;
-            let adminPollingInterval = null;
-            async function loadSessions() {{
-                const response = await fetch('/api/chat/sessions');
-                const data = await response.json();
-                const tbody = document.querySelector('#sessionsTable tbody');
-                tbody.innerHTML = (data.sessions || []).map(s => {{
-                    const date = new Date(s.created_at);
-                    return `<tr><td>${{s.id.slice(0, 8)}}...</td><td><strong>${{s.name || '—'}}</strong></td><td>${{s.email || '—'}}</td><td>${{date.toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="openChat('${{s.id}}', '${{s.name}}')">💬</button></td></tr>`;
-                }}).join('');
-            }}
-            function openChat(sessionId, name) {{
-                currentSessionId = sessionId;
-                document.getElementById('chatModal').style.display = 'flex';
-                document.getElementById('chatMessagesBox').innerHTML = '<div style="text-align: center; color: #999;">Загрузка...</div>';
-                loadChatMessages(); startAdminPolling();
-            }}
-            async function loadChatMessages() {{
-                if (!currentSessionId) return;
-                const response = await fetch(`/api/chat/messages?session_id=${{currentSessionId}}`);
-                const data = await response.json();
-                const box = document.getElementById('chatMessagesBox');
-                box.innerHTML = (data.messages || []).map(m => {{
-                    const align = m.sender === 'user' ? 'right' : 'left';
-                    const bg = m.sender === 'user' ? '#4a9eff' : '#00d4aa';
-                    const color = m.sender === 'user' ? 'white' : '#000';
-                    return `<div style="text-align: ${{align}}; margin: 5px 0;"><span style="background: ${{bg}}; color: ${{color}}; padding: 8px 12px; border-radius: 12px; display: inline-block; max-width: 80%;">${{m.message}}</span></div>`;
-                }}).join('');
-                box.scrollTop = box.scrollHeight;
-            }}
-            async function sendAdminMessage() {{
-                const input = document.getElementById('adminChatInput');
-                const message = input.value.trim();
-                if (!message || !currentSessionId) return;
-                await fetch('/api/chat/message', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ session_id: currentSessionId, message, sender: 'admin' }}) }});
-                input.value = ''; loadChatMessages();
-            }}
-            function startAdminPolling() {{ stopAdminPolling(); adminPollingInterval = setInterval(loadChatMessages, 3000); }}
-            function stopAdminPolling() {{ if (adminPollingInterval) {{ clearInterval(adminPollingInterval); adminPollingInterval = null; }} }}
-            function closeModal() {{ document.getElementById('chatModal').style.display = 'none'; stopAdminPolling(); currentSessionId = null; }}
-            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
-            loadSessions();
-        </script>
-    </body>
-    </html>
-    '''
+    <!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Чаты | Админ-панель</title>{ADMIN_CSS}</head>
+    <body><div class="sidebar"><h2>🖥️ PC Shop</h2><a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a><a href="/admin/orders">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a><a href="/admin/support">💬 Поддержка</a><a href="/admin/chats" class="active">💬 Чаты</a><a href="#" onclick="logout()">🚪 Выйти</a></div>
+    <div class="content"><h1>💬 Активные чаты</h1><div class="card"><table id="sessionsTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Дата</th><th>Действия</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="modal" id="chatModal"><div class="modal-content" style="width:500px;"><h2>Чат с клиентом</h2><div id="chatMessagesBox" style="height:300px;overflow-y:auto;padding:10px;background:#f5f5f5;border-radius:8px;margin-bottom:15px;"></div><div style="display:flex;gap:10px;"><input type="text" id="adminChatInput" placeholder="Ваш ответ..." style="flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;"><button class="btn btn-primary" onclick="sendAdminMessage()">Отправить</button></div><button class="btn btn-danger" onclick="closeModal()" style="margin-top:10px;">Закрыть</button></div></div>
+    <script>
+        let currentSessionId = null, adminPollingInterval = null;
+        async function loadSessions() {{
+            const response = await fetch('/api/chat/sessions'); const data = await response.json();
+            document.querySelector('#sessionsTable tbody').innerHTML = (data.sessions||[]).map(s => `<tr><td>${{s.id.slice(0,8)}}...</td><td><strong>${{s.name||'—'}}</strong></td><td>${{s.email||'—'}}</td><td>${{new Date(s.created_at).toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="openChat('${{s.id}}','${{s.name}}')">💬</button></td></tr>`).join('');
+        }}
+        function openChat(sessionId, name) {{ currentSessionId = sessionId; document.getElementById('chatModal').style.display='flex'; document.getElementById('chatMessagesBox').innerHTML='<div style="text-align:center;color:#999;">Загрузка...</div>'; loadChatMessages(); startAdminPolling(); }}
+        async function loadChatMessages() {{
+            if(!currentSessionId) return;
+            const response = await fetch(`/api/chat/messages?session_id=${{currentSessionId}}`); const data = await response.json();
+            document.getElementById('chatMessagesBox').innerHTML = (data.messages||[]).map(m => `<div style="text-align:${{m.sender==='user'?'right':'left'}};margin:5px 0;"><span style="background:${{m.sender==='user'?'#4a9eff':'#00d4aa'}};color:${{m.sender==='user'?'white':'#000'}};padding:8px 12px;border-radius:12px;display:inline-block;max-width:80%;">${{m.message}}</span></div>`).join('');
+            document.getElementById('chatMessagesBox').scrollTop = document.getElementById('chatMessagesBox').scrollHeight;
+        }}
+        async function sendAdminMessage() {{
+            const message = document.getElementById('adminChatInput').value.trim();
+            if(!message || !currentSessionId) return;
+            await fetch('/api/chat/message', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{ session_id:currentSessionId, message, sender:'admin' }}) }});
+            document.getElementById('adminChatInput').value = ''; loadChatMessages();
+        }}
+        function startAdminPolling() {{ stopAdminPolling(); adminPollingInterval = setInterval(loadChatMessages, 3000); }}
+        function stopAdminPolling() {{ if(adminPollingInterval) {{ clearInterval(adminPollingInterval); adminPollingInterval = null; }} }}
+        function closeModal() {{ document.getElementById('chatModal').style.display='none'; stopAdminPolling(); currentSessionId = null; }}
+        function logout() {{ localStorage.removeItem('admin_token'); window.location.href='/admin'; }}
+        loadSessions();
+    </script></body></html>'''
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
