@@ -568,6 +568,7 @@ def admin_dashboard():
             <a href="/admin/products">📦 Товары</a>
             <a href="/admin/orders">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
+            <a href="/admin/support">💬 Поддержка</a>
             <a href="#" onclick="logout()" style="margin-top: auto;">🚪 Выйти</a>
         </div>
         <div class="content">
@@ -1119,6 +1120,84 @@ def get_support_messages():
         return jsonify({"status": "ok", "messages": response.data})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
+
+
+
+
+@app.route('/admin/support')
+def admin_support():
+    return f'''
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Поддержка | Админ-панель</title>
+        {ADMIN_CSS}
+    </head>
+    <body>
+        <div class="sidebar">
+            <h2>🖥️ PC Shop</h2>
+            <a href="/admin/dashboard">📊 Дашборд</a>
+            <a href="/admin/products">📦 Товары</a>
+            <a href="/admin/orders">🛒 Заказы</a>
+            <a href="/admin/users">👥 Пользователи</a>
+            <a href="/admin/support" class="active">💬 Поддержка</a>
+            <a href="#" onclick="logout()">🚪 Выйти</a>
+        </div>
+        <div class="content">
+            <h1>💬 Запросы в поддержку</h1>
+            <div class="card">
+                <table id="supportTable">
+                    <thead>
+                        <tr><th>ID</th><th>Имя</th><th>Email</th><th>Сообщение</th><th>Статус</th><th>Дата</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        <script>
+            async function loadMessages() {{
+                const response = await fetch('/api/support');
+                const data = await response.json();
+                const tbody = document.querySelector('#supportTable tbody');
+                const statusBadges = {{
+                    'новое': 'badge-info',
+                    'отвечено': 'badge-success'
+                }};
+                
+                tbody.innerHTML = (data.messages || []).map(m => {{
+                    const date = new Date(m.created_at);
+                    const dateStr = date.toLocaleString('ru-RU');
+                    return `
+                        <tr>
+                            <td>${{m.id}}</td>
+                            <td><strong>${{m.name || '—'}}</strong></td>
+                            <td>${{m.email || '—'}}</td>
+                            <td>${{m.message || '—'}}</td>
+                            <td><span class="badge ${{statusBadges[m.status] || 'badge-info'}}">${{m.status || 'новое'}}</span></td>
+                            <td>${{dateStr}}</td>
+                        </tr>
+                    `;
+                }}).join('');
+            }}
+            
+            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
+            loadMessages();
+        </script>
+    </body>
+    </html>
+    '''
+
+
+
+
+
+
+
 
 
 
