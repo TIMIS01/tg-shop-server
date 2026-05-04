@@ -925,48 +925,104 @@ import uuid
 
 @app.route('/api/chat/start', methods=['POST'])
 def start_chat():
+    """Начинает новую сессию чата."""
     data = request.json
     session_id = str(uuid.uuid4())
+    name = data.get('name', '')
+    email = data.get('email', '')
+
     try:
-        supabase.table('chat_sessions').insert({'id':session_id,'name':data.get('name',''),'email':data.get('email',''),'status':'active','created_at':datetime.now().isoformat()}).execute()
-        supabase.table('chat_messages').insert({'session_id':session_id,'sender':'system','message':f'Чат начат пользователем {data.get("name","")}','created_at':datetime.now().isoformat()}).execute()
-        return jsonify({"status":"ok","session_id":session_id}), 200
-    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
+        # Создаём сессию
+        supabase.table('chat_sessions').insert({
+            'id': session_id,
+            'name': name,
+            'email': email,
+            'status': 'active',
+            'created_at': datetime.now().isoformat()
+        }).execute()
+
+        # Добавляем системное сообщение
+        supabase.table('chat_messages').insert({
+            'session_id': session_id,
+            'sender': 'system',
+            'message': f'⚠️ История чата хранится 7 дней, после чего автоматически удаляется.',
+            'created_at': datetime.now().isoformat()
+        }).execute()
+
+        logger.info(f"✅ Чат создан: {session_id} ({name}, {email})")
+        return jsonify({"status": "ok", "session_id": session_id}), 200
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания чата: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/chat/message', methods=['POST'])
 def chat_message():
-    """Отправляет сообщение в чат."""
+    """Отправляет сообщение в чат (от пользователя или админа)."""
     data = request.json
-    
+    session_id = data.get('session_id', '')
+    sender = data.get('sender', 'user')
+    message = data.get('message', '')
+
+    if not session_id or not message:
+        return jsonify({"status": "error", "message": "session_id и message обязательны"}), 400
+
     try:
         message_data = {
-            'session_id': data.get('session_id', ''),
-            'sender': data.get('sender', 'user'),
-            'message': data.get('message', ''),
+            'session_id': session_id,
+            'sender': sender,
+            'message': message,
             'created_at': datetime.now().isoformat()
         }
-        
+
         # Если есть файл — сохраняем ссылку
         if data.get('file_data'):
             message_data['file_url'] = data.get('file_data', '')
             message_data['file_name'] = data.get('file_name', '')
             message_data['file_type'] = data.get('file_type', '')
-        
-        supabase.table('chat_messages').insert(message_data).execute()
-        
-        return jsonify({"status": "ok"}), 200
+
+        result = supabase.table('chat_messages').insert(message_data).execute()
+        logger.info(f"✅ Сообщение сохранено в чат {session_id}: {sender} — {message[:50]}")
+        return jsonify({"status": "ok", "id": result.data[0]['id'] if result.data else None}), 200
     except Exception as e:
+        logger.error(f"❌ Ошибка сохранения сообщения: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
-    try: return jsonify({"status":"ok","messages":supabase.table('chat_messages').select('*').eq('session_id', request.args.get('session_id','')).order('created_at', asc=True).execute().data}), 200
-    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
+    """Получает сообщения чата по session_id."""
+    session_id = request.args.get('session_id', '')
+
+    if not session_id:
+        return jsonify({"status": "error", "message": "session_id обязателен"}), 400
+
+    try:
+        response = supabase.table('chat_messages')\
+            .select('*')\
+            .eq('session_id', session_id)\
+            .order('created_at', desc=False)\
+            .execute()
+
+        logger.info(f"📩 Запрошены сообщения для {session_id}: найдено {len(response.data)}")
+        return jsonify({"status": "ok", "messages": response.data}), 200
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения сообщений: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/chat/sessions', methods=['GET'])
 def get_chat_sessions():
-    try: return jsonify({"status":"ok","sessions":supabase.table('chat_sessions').select('*').eq('status','active').order('created_at', desc=True).execute().data}), 200
-    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
+    """Получает все активные сессии чата."""
+    try:
+        response = supabase.table('chat_sessions')\
+            .select('*')\
+            .eq('status', 'active')\
+            .order('created_at', desc=True)\
+            .execute()
+
+        logger.info(f"📋 Активные чаты: {len(response.data)}")
+        return jsonify({"status": "ok", "sessions": response.data}), 200
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения сессий: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/admin/chats')
 def admin_chats():
