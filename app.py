@@ -569,6 +569,7 @@ def admin_dashboard():
             <a href="/admin/orders">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
             <a href="/admin/support">💬 Поддержка</a>
+            <a href="/admin/chats" class="active">💬 Чаты</a>
             <a href="#" onclick="logout()" style="margin-top: auto;">🚪 Выйти</a>
         </div>
         <div class="content">
@@ -637,6 +638,8 @@ def admin_products():
             <a href="/admin/products" class="active">📦 Товары</a>
             <a href="/admin/orders">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
+            <a href="/admin/support">💬 Поддержка</a>
+            <a href="/admin/chats" class="active">💬 Чаты</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
         <div class="content">
@@ -776,6 +779,8 @@ def admin_orders():
             <a href="/admin/products">📦 Товары</a>
             <a href="/admin/orders" class="active">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
+            <a href="/admin/support">💬 Поддержка</a>
+            <a href="/admin/chats" class="active">💬 Чаты</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
         <div class="content">
@@ -1145,7 +1150,8 @@ def admin_support():
             <a href="/admin/products">📦 Товары</a>
             <a href="/admin/orders">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
-            <a href="/admin/support" class="active">💬 Поддержка</a>
+            <a href="/admin/support">💬 Поддержка</a>
+            <a href="/admin/chats" class="active">💬 Чаты</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
         <div class="content">
@@ -1196,10 +1202,207 @@ def admin_support():
 
 
 
+# ========== ЧАТ ПОДДЕРЖКИ ==========
+import uuid
+
+@app.route('/api/chat/start', methods=['POST'])
+def start_chat():
+    """Начинает новую сессию чата."""
+    data = request.json
+    session_id = str(uuid.uuid4())
+    
+    try:
+        supabase.table('chat_sessions').insert({
+            'id': session_id,
+            'name': data.get('name', ''),
+            'email': data.get('email', ''),
+            'status': 'active',
+            'created_at': datetime.now().isoformat()
+        }).execute()
+        
+        # Первое сообщение
+        supabase.table('chat_messages').insert({
+            'session_id': session_id,
+            'sender': 'system',
+            'message': f'Чат начат пользователем {data.get("name", "")} ({data.get("email", "")})',
+            'created_at': datetime.now().isoformat()
+        }).execute()
+        
+        return jsonify({"status": "ok", "session_id": session_id}), 200
+    except Exception as e:
+        logger.error(f"Ошибка создания чата: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/chat/message', methods=['POST'])
+def chat_message():
+    """Отправляет сообщение в чат."""
+    data = request.json
+    
+    try:
+        supabase.table('chat_messages').insert({
+            'session_id': data.get('session_id', ''),
+            'sender': data.get('sender', 'user'),
+            'message': data.get('message', ''),
+            'created_at': datetime.now().isoformat()
+        }).execute()
+        
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/chat/messages', methods=['GET'])
+def get_chat_messages():
+    """Получает сообщения чата по session_id."""
+    session_id = request.args.get('session_id', '')
+    
+    try:
+        response = supabase.table('chat_messages').select('*').eq('session_id', session_id).order('created_at', asc=True).execute()
+        return jsonify({"status": "ok", "messages": response.data}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/chat/sessions', methods=['GET'])
+def get_chat_sessions():
+    """Получает все активные сессии чата."""
+    try:
+        response = supabase.table('chat_sessions').select('*').eq('status', 'active').order('created_at', desc=True).execute()
+        return jsonify({"status": "ok", "sessions": response.data}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
-
-
+@app.route('/admin/chats')
+def admin_chats():
+    return f'''
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Чаты | Админ-панель</title>
+        {ADMIN_CSS}
+    </head>
+    <body>
+        <div class="sidebar">
+            <h2>🖥️ PC Shop</h2>
+            <a href="/admin/dashboard">📊 Дашборд</a>
+            <a href="/admin/products">📦 Товары</a>
+            <a href="/admin/orders">🛒 Заказы</a>
+            <a href="/admin/users">👥 Пользователи</a>
+            <a href="/admin/support">💬 Поддержка</a>
+            <a href="/admin/chats" class="active">💬 Чаты</a>
+            <a href="#" onclick="logout()">🚪 Выйти</a>
+        </div>
+        <div class="content">
+            <h1>💬 Активные чаты</h1>
+            <div class="card">
+                <table id="sessionsTable">
+                    <thead>
+                        <tr><th>ID</th><th>Имя</th><th>Email</th><th>Дата</th><th>Действия</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="modal" id="chatModal">
+            <div class="modal-content" style="width: 500px;">
+                <h2>Чат с клиентом</h2>
+                <div id="chatMessagesBox" style="height: 300px; overflow-y: auto; padding: 10px; background: #f5f5f5; border-radius: 8px; margin-bottom: 15px;"></div>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="adminChatInput" placeholder="Ваш ответ..." style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+                    <button class="btn btn-primary" onclick="sendAdminMessage()">Отправить</button>
+                </div>
+                <button class="btn btn-danger" onclick="closeModal()" style="margin-top: 10px;">Закрыть</button>
+            </div>
+        </div>
+        <script>
+            let currentSessionId = null;
+            let adminPollingInterval = null;
+            
+            async function loadSessions() {{
+                const response = await fetch('/api/chat/sessions');
+                const data = await response.json();
+                const tbody = document.querySelector('#sessionsTable tbody');
+                
+                tbody.innerHTML = (data.sessions || []).map(s => {{
+                    const date = new Date(s.created_at);
+                    return `
+                        <tr>
+                            <td>${{s.id.slice(0, 8)}}...</td>
+                            <td><strong>${{s.name || '—'}}</strong></td>
+                            <td>${{s.email || '—'}}</td>
+                            <td>${{date.toLocaleString('ru-RU')}}</td>
+                            <td><button class="btn btn-info" onclick="openChat('${{s.id}}', '${{s.name}}')">💬</button></td>
+                        </tr>
+                    `;
+                }}).join('');
+            }}
+            
+            function openChat(sessionId, name) {{
+                currentSessionId = sessionId;
+                document.getElementById('chatModal').style.display = 'flex';
+                document.getElementById('chatMessagesBox').innerHTML = '<div style="text-align: center; color: #999;">Загрузка...</div>';
+                loadChatMessages();
+                startAdminPolling();
+            }}
+            
+            async function loadChatMessages() {{
+                if (!currentSessionId) return;
+                const response = await fetch(`/api/chat/messages?session_id=${{currentSessionId}}`);
+                const data = await response.json();
+                
+                const box = document.getElementById('chatMessagesBox');
+                box.innerHTML = (data.messages || []).map(m => {{
+                    const align = m.sender === 'user' ? 'right' : 'left';
+                    const bg = m.sender === 'user' ? '#4a9eff' : '#00d4aa';
+                    const color = m.sender === 'user' ? 'white' : '#000';
+                    return `<div style="text-align: ${{align}}; margin: 5px 0;">
+                        <span style="background: ${{bg}}; color: ${{color}}; padding: 8px 12px; border-radius: 12px; display: inline-block; max-width: 80%;">${{m.message}}</span>
+                    </div>`;
+                }}).join('');
+                box.scrollTop = box.scrollHeight;
+            }}
+            
+            async function sendAdminMessage() {{
+                const input = document.getElementById('adminChatInput');
+                const message = input.value.trim();
+                if (!message || !currentSessionId) return;
+                
+                await fetch('/api/chat/message', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ session_id: currentSessionId, message, sender: 'admin' }})
+                }});
+                
+                input.value = '';
+                loadChatMessages();
+            }}
+            
+            function startAdminPolling() {{
+                stopAdminPolling();
+                adminPollingInterval = setInterval(loadChatMessages, 3000);
+            }}
+            
+            function stopAdminPolling() {{
+                if (adminPollingInterval) {{
+                    clearInterval(adminPollingInterval);
+                    adminPollingInterval = null;
+                }}
+            }}
+            
+            function closeModal() {{
+                document.getElementById('chatModal').style.display = 'none';
+                stopAdminPolling();
+                currentSessionId = null;
+            }}
+            
+            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
+            loadSessions();
+        </script>
+    </body>
+    </html>
+    '''
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
