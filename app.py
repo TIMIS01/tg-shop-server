@@ -1074,6 +1074,54 @@ def reset_password():
         return jsonify({"status": "error", "message": "Ошибка смены пароля"}), 500
     
 
+
+
+
+
+
+
+# ========== ПОДДЕРЖКА ==========
+@app.route('/api/support', methods=['POST'])
+def support_message():
+    """Сохраняет обращение в поддержку."""
+    data = request.json
+    try:
+        supabase.table('support_messages').insert({
+            'name': data.get('name', ''),
+            'email': data.get('email', ''),
+            'message': data.get('message', ''),
+            'status': 'новое',
+            'created_at': datetime.now().isoformat()
+        }).execute()
+        
+        # Отправляем уведомление тебе на почту
+        notification_data = {
+            "order_id": f"SUPPORT-{datetime.now().strftime('%H%M%S')}",
+            "product_name": f"Запрос от {data.get('name', '—')} ({data.get('email', '—')})",
+            "price": 0,
+            "city": "Поддержка",
+            "postal": data.get('message', ''),
+            "comment": '',
+            "timestamp": datetime.now().strftime("%d.%m.%Y %H:%M")
+        }
+        send_order_notification(notification_data)
+        
+        return jsonify({"status": "ok", "message": "Сообщение отправлено"}), 200
+    except Exception as e:
+        logger.error(f"Ошибка сохранения обращения: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/support', methods=['GET'])
+def get_support_messages():
+    """Получает все обращения в поддержку."""
+    try:
+        response = supabase.table('support_messages').select('*').order('created_at', desc=True).execute()
+        return jsonify({"status": "ok", "messages": response.data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
