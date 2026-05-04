@@ -935,11 +935,28 @@ def start_chat():
 
 @app.route('/api/chat/message', methods=['POST'])
 def chat_message():
+    """Отправляет сообщение в чат."""
     data = request.json
+    
     try:
-        supabase.table('chat_messages').insert({'session_id':data.get('session_id',''),'sender':data.get('sender','user'),'message':data.get('message',''),'created_at':datetime.now().isoformat()}).execute()
-        return jsonify({"status":"ok"}), 200
-    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
+        message_data = {
+            'session_id': data.get('session_id', ''),
+            'sender': data.get('sender', 'user'),
+            'message': data.get('message', ''),
+            'created_at': datetime.now().isoformat()
+        }
+        
+        # Если есть файл — сохраняем ссылку
+        if data.get('file_data'):
+            message_data['file_url'] = data.get('file_data', '')
+            message_data['file_name'] = data.get('file_name', '')
+            message_data['file_type'] = data.get('file_type', '')
+        
+        supabase.table('chat_messages').insert(message_data).execute()
+        
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
