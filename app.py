@@ -9,7 +9,7 @@ import os
 import logging
 import hashlib
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
@@ -433,6 +433,7 @@ def login_user():
 # ========== ВЕБХУК ДЛЯ БОТА И САЙТА ==========
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
+    cleanup_old_chats()  # ← ДОБАВЬ ЭТУ СТРОКУ
     try:
         data = request.json
         logger.info(f"📥 Получены данные из Mini App: {data}")
@@ -1029,26 +1030,71 @@ def admin_chats():
     return f'''
     <!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Чаты | Админ-панель</title>{ADMIN_CSS}</head>
     <body><div class="sidebar"><h2>🖥️ PC Shop</h2><a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a><a href="/admin/orders">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a><a href="/admin/support">💬 Поддержка</a><a href="/admin/chats" class="active">💬 Чаты</a><a href="#" onclick="logout()">🚪 Выйти</a></div>
-    <div class="content"><h1>💬 Активные чаты</h1><div class="card"><table id="sessionsTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Дата</th><th>Действия</th></tr></thead><tbody></tbody></table></div></div>
-    <div class="modal" id="chatModal"><div class="modal-content" style="width:500px;"><h2>Чат с клиентом</h2><div id="chatMessagesBox" style="height:300px;overflow-y:auto;padding:10px;background:#f5f5f5;border-radius:8px;margin-bottom:15px;"></div><div style="display:flex;gap:10px;"><input type="text" id="adminChatInput" placeholder="Ваш ответ..." style="flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;"><button class="btn btn-primary" onclick="sendAdminMessage()">Отправить</button></div><button class="btn btn-danger" onclick="closeModal()" style="margin-top:10px;">Закрыть</button></div></div>
+    <div class="content"><h1>💬 Активные чаты</h1><button class="btn btn-primary" onclick="loadSessions()" style="margin-bottom:15px;">🔄 Обновить</button><div class="card"><table id="sessionsTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Дата</th><th>Действия</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="modal" id="chatModal"><div class="modal-content" style="width:500px;"><h2>Чат с клиентом</h2><div id="chatMessagesBox" style="height:300px;overflow-y:auto;padding:10px;background:#f5f5f5;border-radius:8px;margin-bottom:15px;"></div><div style="display:flex;gap:10px;align-items:center;"><input type="text" id="adminChatInput" placeholder="Ваш ответ..." style="flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;"><button class="btn btn-primary" onclick="sendAdminMessage()" style="height:40px;">Отправить</button></div><button class="btn btn-danger" onclick="closeModal()" style="margin-top:10px;">Закрыть</button></div></div>
     <script>
         let currentSessionId = null, adminPollingInterval = null;
         async function loadSessions() {{
-            const response = await fetch('/api/chat/sessions'); const data = await response.json();
-            document.querySelector('#sessionsTable tbody').innerHTML = (data.sessions||[]).map(s => `<tr><td>${{s.id.slice(0,8)}}...</td><td><strong>${{s.name||'—'}}</strong></td><td>${{s.email||'—'}}</td><td>${{new Date(s.created_at).toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="openChat('${{s.id}}','${{s.name}}')">💬</button></td></tr>`).join('');
+            try {{
+                const response = await fetch('/api/chat/sessions'); const data = await response.json();
+                const tbody = document.querySelector('#sessionsTable tbody');
+                if (!data.sessions || data.sessions.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;">Нет активных чатов</td></tr>';
+                }} else {{
+                    tbody.innerHTML = data.sessions.map(s => {{
+                        const date = new Date(s.created_at);
+                        return `<tr><td>${{s.id.slice(0,8)}}...</td><td><strong>${{s.name||'—'}}</strong></td><td>${{s.email||'—'}}</td><td>${{date.toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="openChat('${{s.id}}','${{s.name}}')">💬</button></td></tr>`;
+                    }}).join('');
+                }}
+            }} catch(e) {{
+                document.querySelector('#sessionsTable tbody').innerHTML = '<tr><td colspan="5" style="text-align:center;color:red;">Ошибка загрузки</td></tr>';
+            }}
         }}
         function openChat(sessionId, name) {{ currentSessionId = sessionId; document.getElementById('chatModal').style.display='flex'; document.getElementById('chatMessagesBox').innerHTML='<div style="text-align:center;color:#999;">Загрузка...</div>'; loadChatMessages(); startAdminPolling(); }}
         async function loadChatMessages() {{
             if(!currentSessionId) return;
-            const response = await fetch(`/api/chat/messages?session_id=${{currentSessionId}}`); const data = await response.json();
-            document.getElementById('chatMessagesBox').innerHTML = (data.messages||[]).map(m => `<div style="text-align:${{m.sender==='user'?'right':'left'}};margin:5px 0;"><span style="background:${{m.sender==='user'?'#4a9eff':'#00d4aa'}};color:${{m.sender==='user'?'white':'#000'}};padding:8px 12px;border-radius:12px;display:inline-block;max-width:80%;">${{m.message}}</span></div>`).join('');
-            document.getElementById('chatMessagesBox').scrollTop = document.getElementById('chatMessagesBox').scrollHeight;
+            try {{
+                const response = await fetch(`/api/chat/messages?session_id=${{currentSessionId}}`); const data = await response.json();
+                const box = document.getElementById('chatMessagesBox');
+                if (!data.messages || data.messages.length === 0) {{
+                    box.innerHTML = '<div style="text-align:center;color:#999;">Нет сообщений</div>';
+                }} else {{
+                    box.innerHTML = data.messages.map(m => {{
+                        const align = m.sender==='user' ? 'right' : 'left';
+                        const bg = m.sender==='user' ? '#4a9eff' : (m.sender==='admin' ? '#00d4aa' : '#ccc');
+                        const color = m.sender==='user' ? 'white' : (m.sender==='admin' ? '#000' : '#666');
+                        
+                        // Проверяем, является ли сообщение файлом
+                        let messageHtml = '';
+                        if (m.file_url && m.file_type) {{
+                            if (m.file_type.startsWith('image/')) {{
+                                messageHtml = `<a href="${{m.file_url}}" target="_blank"><img src="${{m.file_url}}" style="max-width:150px;max-height:150px;border-radius:8px;display:block;"></a><br><small>${{m.file_name||''}}</small>`;
+                            }} else if (m.file_type.startsWith('video/')) {{
+                                messageHtml = `<video controls style="max-width:150px;max-height:150px;border-radius:8px;"><source src="${{m.file_url}}" type="${{m.file_type}}"></video><br><small>${{m.file_name||''}}</small>`;
+                            }} else {{
+                                messageHtml = `<a href="${{m.file_url}}" target="_blank" style="color:#4a9eff;text-decoration:underline;">📎 ${{m.file_name||'Скачать файл'}}</a>`;
+                            }}
+                        }} else {{
+                            messageHtml = m.message;
+                        }}
+                        
+                        return `<div style="text-align:${{align}};margin:5px 0;"><span style="background:${{bg}};color:${{color}};padding:8px 12px;border-radius:12px;display:inline-block;max-width:80%;font-size:14px;">${{messageHtml}}</span></div>`;
+                    }}).join('');
+                }}
+                box.scrollTop = box.scrollHeight;
+            }} catch(e) {{
+                document.getElementById('chatMessagesBox').innerHTML = '<div style="text-align:center;color:red;">Ошибка загрузки сообщений</div>';
+            }}
         }}
         async function sendAdminMessage() {{
-            const message = document.getElementById('adminChatInput').value.trim();
+            const input = document.getElementById('adminChatInput');
+            const message = input.value.trim();
             if(!message || !currentSessionId) return;
-            await fetch('/api/chat/message', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{ session_id:currentSessionId, message, sender:'admin' }}) }});
-            document.getElementById('adminChatInput').value = ''; loadChatMessages();
+            try {{
+                await fetch('/api/chat/message', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{ session_id:currentSessionId, message, sender:'admin' }}) }});
+                input.value = '';
+                loadChatMessages();
+            }} catch(e) {{ alert('❌ Ошибка отправки сообщения'); }}
         }}
         function startAdminPolling() {{ stopAdminPolling(); adminPollingInterval = setInterval(loadChatMessages, 3000); }}
         function stopAdminPolling() {{ if(adminPollingInterval) {{ clearInterval(adminPollingInterval); adminPollingInterval = null; }} }}
@@ -1056,6 +1102,36 @@ def admin_chats():
         function logout() {{ localStorage.removeItem('admin_token'); window.location.href='/admin'; }}
         loadSessions();
     </script></body></html>'''
+
+
+
+
+
+
+def cleanup_old_chats():
+    """Удаляет чаты и сообщения старше 7 дней."""
+    try:
+        seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        
+        # Находим старые сессии
+        old_sessions = supabase.table('chat_sessions').select('id').lt('created_at', seven_days_ago).execute()
+        
+        if old_sessions.data:
+            for session in old_sessions.data:
+                session_id = session['id']
+                # Удаляем сообщения
+                supabase.table('chat_messages').delete().eq('session_id', session_id).execute()
+                # Удаляем сессию
+                supabase.table('chat_sessions').delete().eq('id', session_id).execute()
+            
+            logger.info(f"🗑️ Удалено {len(old_sessions.data)} старых чатов (старше 7 дней)")
+    except Exception as e:
+        logger.error(f"❌ Ошибка очистки старых чатов: {e}")
+
+
+
+
+
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
