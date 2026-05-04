@@ -1,5 +1,6 @@
 import smtplib
 import random
+import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from flask import Flask, jsonify, request
@@ -78,7 +79,7 @@ ADMIN_CSS = '''
     .badge-info { background: #d1ecf1; color: #0c5460; }
     .badge-danger { background: #f8d7da; color: #721c24; }
     .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000; }
-    .modal-content { background: white; padding: 30px; border-radius: 16px; width: 600px; max-height: 80vh; overflow-y: auto; }
+    .modal-content { background: white; padding: 30px; border-radius: 16px; width: 650px; max-height: 85vh; overflow-y: auto; }
     .modal-content input, .modal-content textarea, .modal-content select { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
     .modal-content label { font-weight: 600; display: block; margin-bottom: 6px; color: #333; }
     .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
@@ -93,6 +94,10 @@ ADMIN_CSS = '''
     .detail-item { padding: 10px 0; border-bottom: 1px solid #eee; }
     .detail-item strong { display: block; color: #666; font-size: 12px; margin-bottom: 3px; }
     .detail-item span { font-size: 15px; }
+    .image-preview { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .image-preview img { width: 100px; height: 100px; object-fit: cover; border-radius: 8px; border: 2px solid #eee; }
+    .image-preview .img-wrapper { position: relative; display: inline-block; }
+    .image-preview .remove-img { position: absolute; top: -5px; right: -5px; background: #e74c3c; color: white; border: none; border-radius: 50%; width: 22px; height: 22px; cursor: pointer; font-size: 12px; }
 </style>
 '''
 
@@ -313,14 +318,12 @@ def get_users():
 # ========== АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ==========
 @app.route('/api/send-verification', methods=['POST'])
 def send_verification_code():
-    """Отправляет код подтверждения на почту."""
     data = request.json
     email = data.get('email', '').strip().lower()
 
     if not email or '@' not in email:
         return jsonify({"status": "error", "message": "Некорректный email"}), 400
 
-    # Проверка: если пользователь с такой почтой уже есть — запрещаем
     try:
         existing_user = supabase.table('users').select('id').eq('email', email).execute()
         if existing_user.data and len(existing_user.data) > 0:
@@ -328,17 +331,9 @@ def send_verification_code():
     except Exception as e:
         logger.error(f"Ошибка проверки существующего пользователя: {e}")
 
-    # Генерируем 6-значный код
     code = str(random.randint(100000, 999999))
-    
-    # Сохраняем код
-    verification_codes[email] = {
-        "code": code,
-        "timestamp": time.time(),
-        "attempts": 0
-    }
+    verification_codes[email] = {"code": code, "timestamp": time.time(), "attempts": 0}
 
-    # Отправляем письмо
     subject = "Подтверждение почты | PCGGPRO"
     body = f"""
     <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
@@ -365,11 +360,9 @@ def verify_email_code():
         return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
 
     stored_data = verification_codes[email]
-
     if time.time() - stored_data["timestamp"] > 600:
         del verification_codes[email]
         return jsonify({"status": "error", "message": "Код истёк. Запросите новый"}), 400
-
     if stored_data["attempts"] >= 3:
         del verification_codes[email]
         return jsonify({"status": "error", "message": "Превышено количество попыток. Запросите новый код"}), 400
@@ -463,7 +456,6 @@ def webhook():
             }
             
             order_data = {k: v for k, v in order_data.items() if v is not None}
-            
             response = supabase.table('orders').insert(order_data).execute()
             
             order_notification_data = {
@@ -606,11 +598,7 @@ def admin_dashboard():
                 document.getElementById('revenueCount').textContent = totalRevenue.toLocaleString() + ' ₽';
             }}
             
-            function logout() {{
-                localStorage.removeItem('admin_token');
-                window.location.href = '/admin';
-            }}
-            
+            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
             loadStats();
         </script>
     </body>
@@ -655,7 +643,7 @@ def admin_products():
         <div class="modal" id="productModal">
             <div class="modal-content" style="width: 650px;">
                 <h2 id="modalTitle">Добавить товар</h2>
-                <form id="productForm">
+                <form id="productForm" enctype="multipart/form-data">
                     <input type="hidden" id="productId">
                     <label>Название</label>
                     <input type="text" id="name" required>
@@ -670,11 +658,14 @@ def admin_products():
                     </div>
                     <label>Описание</label>
                     <textarea id="description" rows="4"></textarea>
-                    <label>🖼️ Ссылки на картинки (по одной на строку, до 5 штук)</label>
-                    <textarea id="images" rows="3" placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg"></textarea>
-                    <p style="font-size: 11px; color: #999; margin-top: 5px;">Загрузите картинки на любой хостинг (ImgBB, Cloudinary, и т.д.) и вставьте прямые ссылки. По одной ссылке на строку.</p>
+                    
+                    <label>🖼️ Картинки товара (до 5 штук)</label>
+                    <input type="file" id="imageFiles" accept="image/*" multiple onchange="previewImages()" style="margin-bottom: 10px;">
+                    <div class="image-preview" id="imagePreview"></div>
+                    <p style="font-size: 11px; color: #999; margin-top: 5px;">Выберите до 5 картинок с компьютера. Они будут загружены при сохранении товара.</p>
+                    
                     <div style="margin-top: 20px; display: flex; gap: 10px;">
-                        <button type="submit" class="btn btn-primary">Сохранить</button>
+                        <button type="button" class="btn btn-primary" onclick="saveProduct()">Сохранить</button>
                         <button type="button" class="btn btn-danger" onclick="closeModal()">Отмена</button>
                     </div>
                 </form>
@@ -682,6 +673,7 @@ def admin_products():
         </div>
         <script>
             let editingId = null;
+            let selectedImages = [];
             
             async function loadProducts() {{
                 const response = await fetch('/api/products');
@@ -701,11 +693,40 @@ def admin_products():
                 `).join('');
             }}
             
-            function openAddModal() {{ editingId = null; document.getElementById('modalTitle').textContent = 'Добавить товар'; document.getElementById('productForm').reset(); document.getElementById('productModal').style.display = 'flex'; }}
+            function openAddModal() {{ 
+                editingId = null; 
+                selectedImages = [];
+                document.getElementById('modalTitle').textContent = 'Добавить товар'; 
+                document.getElementById('productForm').reset(); 
+                document.getElementById('imagePreview').innerHTML = '';
+                document.getElementById('productModal').style.display = 'flex'; 
+            }}
             function closeModal() {{ document.getElementById('productModal').style.display = 'none'; }}
+            
+            function previewImages() {{
+                const files = document.getElementById('imageFiles').files;
+                selectedImages = Array.from(files).slice(0, 5);
+                const preview = document.getElementById('imagePreview');
+                preview.innerHTML = selectedImages.map((file, i) => {{
+                    const url = URL.createObjectURL(file);
+                    return `<div class="img-wrapper">
+                        <img src="${{url}}" alt="Preview">
+                        <button class="remove-img" onclick="removeImage(${{i}})">×</button>
+                    </div>`;
+                }}).join('');
+            }}
+            
+            function removeImage(index) {{
+                selectedImages.splice(index, 1);
+                const dt = new DataTransfer();
+                selectedImages.forEach(f => dt.items.add(f));
+                document.getElementById('imageFiles').files = dt.files;
+                previewImages();
+            }}
             
             async function editProduct(id) {{
                 editingId = id;
+                selectedImages = [];
                 document.getElementById('modalTitle').textContent = 'Редактировать товар';
                 const response = await fetch('/api/products');
                 const data = await response.json();
@@ -720,7 +741,8 @@ def admin_products():
                     document.getElementById('storage').value = product.storage || '';
                     document.getElementById('psu').value = product.psu || '';
                     document.getElementById('description').value = product.description || '';
-                    document.getElementById('images').value = (product.images || []).join('\\n');
+                    document.getElementById('imagePreview').innerHTML = '';
+                    document.getElementById('imageFiles').value = '';
                     document.getElementById('productModal').style.display = 'flex';
                 }}
             }}
@@ -732,15 +754,33 @@ def admin_products():
                 }}
             }}
             
-            document.getElementById('productForm').addEventListener('submit', async (e) => {{
-                e.preventDefault();
+            async function saveProduct() {{
+                const name = document.getElementById('name').value.trim();
+                const price = document.getElementById('price').value.trim();
                 
-                const imagesRaw = document.getElementById('images').value.trim();
-                const images = imagesRaw ? imagesRaw.split('\\n').map(s => s.trim()).filter(s => s.length > 0) : [];
+                if (!name || !price) {{
+                    alert('Заполните название и цену!');
+                    return;
+                }}
+                
+                const btn = event.target;
+                btn.textContent = '⏳ Сохранение...';
+                btn.disabled = true;
+                
+                // Конвертируем выбранные картинки в base64
+                const imagePromises = selectedImages.map(file => {{
+                    return new Promise((resolve) => {{
+                        const reader = new FileReader();
+                        reader.onload = (e) => resolve(e.target.result);
+                        reader.readAsDataURL(file);
+                    }});
+                }});
+                
+                const images = await Promise.all(imagePromises);
                 
                 const productData = {{
-                    name: document.getElementById('name').value,
-                    price: parseInt(document.getElementById('price').value),
+                    name: name,
+                    price: parseInt(price),
                     cpu: document.getElementById('cpu').value,
                     gpu: document.getElementById('gpu').value,
                     ram: document.getElementById('ram').value,
@@ -755,9 +795,12 @@ def admin_products():
                 }} else {{
                     await fetch('/api/products', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify(productData) }});
                 }}
+                
+                btn.textContent = 'Сохранить';
+                btn.disabled = false;
                 closeModal();
                 loadProducts();
-            }});
+            }}
             
             function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
             loadProducts();
@@ -980,10 +1023,8 @@ reset_tokens = {}
 def forgot_password():
     data = request.json
     email = data.get('email', '').strip().lower()
-
     if not email or '@' not in email:
         return jsonify({"status": "error", "message": "Некорректный email"}), 400
-
     try:
         existing = supabase.table('users').select('id').eq('email', email).execute()
         if not existing.data:
@@ -993,13 +1034,7 @@ def forgot_password():
 
     code = str(random.randint(100000, 999999))
     reset_token = hashlib.sha256(f"{SECRET_KEY}{email}{time.time()}".encode()).hexdigest()
-
-    reset_tokens[email] = {
-        "code": code,
-        "token": reset_token,
-        "timestamp": time.time(),
-        "attempts": 0
-    }
+    reset_tokens[email] = {"code": code, "token": reset_token, "timestamp": time.time(), "attempts": 0}
 
     subject = "Восстановление пароля | PCGGPRO"
     body = f"""
@@ -1011,7 +1046,6 @@ def forgot_password():
         <p style="color: #999; font-size: 12px;">Код действителен в течение 10 минут.</p>
     </div>
     """
-
     if send_email(email, subject, body):
         return jsonify({"status": "ok", "reset_token": reset_token})
     else:
@@ -1023,25 +1057,18 @@ def verify_reset_code():
     email = data.get('email', '').strip().lower()
     code = data.get('code', '').strip()
     token = data.get('reset_token', '').strip()
-
     if email not in reset_tokens:
         return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
-
     stored = reset_tokens[email]
-
     if stored["token"] != token:
         return jsonify({"status": "error", "message": "Неверный токен"}), 400
-
     if time.time() - stored["timestamp"] > 600:
         del reset_tokens[email]
         return jsonify({"status": "error", "message": "Код истёк. Запросите новый"}), 400
-
     if stored["attempts"] >= 3:
         del reset_tokens[email]
         return jsonify({"status": "error", "message": "Превышено количество попыток"}), 400
-
     stored["attempts"] += 1
-
     if stored["code"] == code:
         return jsonify({"status": "ok", "message": "Код подтверждён"})
     else:
@@ -1053,18 +1080,13 @@ def reset_password():
     email = data.get('email', '').strip().lower()
     password = data.get('password', '')
     token = data.get('reset_token', '')
-
     if email not in reset_tokens:
         return jsonify({"status": "error", "message": "Токен не найден или истёк"}), 400
-
     stored = reset_tokens[email]
-
     if stored["token"] != token:
         return jsonify({"status": "error", "message": "Неверный токен"}), 400
-
     if len(password) < 6:
         return jsonify({"status": "error", "message": "Пароль должен быть не менее 6 символов"}), 400
-
     try:
         password_hash = hashlib.sha256(password.encode()).hexdigest()
         supabase.table('users').update({'password_hash': password_hash}).eq('email', email).execute()
@@ -1086,7 +1108,6 @@ def support_message():
             'status': 'новое',
             'created_at': datetime.now().isoformat()
         }).execute()
-        
         notification_data = {
             "order_id": f"SUPPORT-{datetime.now().strftime('%H%M%S')}",
             "product_name": f"Запрос от {data.get('name', '—')} ({data.get('email', '—')})",
@@ -1097,7 +1118,6 @@ def support_message():
             "timestamp": datetime.now().strftime("%d.%m.%Y %H:%M")
         }
         send_order_notification(notification_data)
-        
         return jsonify({"status": "ok", "message": "Сообщение отправлено"}), 200
     except Exception as e:
         logger.error(f"Ошибка сохранения обращения: {e}")
@@ -1149,14 +1169,9 @@ def admin_support():
                 const response = await fetch('/api/support');
                 const data = await response.json();
                 const tbody = document.querySelector('#supportTable tbody');
-                const statusBadges = {{
-                    'новое': 'badge-info',
-                    'отвечено': 'badge-success'
-                }};
-                
+                const statusBadges = {{ 'новое': 'badge-info', 'отвечено': 'badge-success' }};
                 tbody.innerHTML = (data.messages || []).map(m => {{
                     const date = new Date(m.created_at);
-                    const dateStr = date.toLocaleString('ru-RU');
                     return `
                         <tr>
                             <td>${{m.id}}</td>
@@ -1164,12 +1179,11 @@ def admin_support():
                             <td>${{m.email || '—'}}</td>
                             <td>${{m.message || '—'}}</td>
                             <td><span class="badge ${{statusBadges[m.status] || 'badge-info'}}">${{m.status || 'новое'}}</span></td>
-                            <td>${{dateStr}}</td>
+                            <td>${{date.toLocaleString('ru-RU')}}</td>
                         </tr>
                     `;
                 }}).join('');
             }}
-            
             function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
             loadMessages();
         </script>
@@ -1184,23 +1198,16 @@ import uuid
 def start_chat():
     data = request.json
     session_id = str(uuid.uuid4())
-    
     try:
         supabase.table('chat_sessions').insert({
-            'id': session_id,
-            'name': data.get('name', ''),
-            'email': data.get('email', ''),
-            'status': 'active',
-            'created_at': datetime.now().isoformat()
+            'id': session_id, 'name': data.get('name', ''), 'email': data.get('email', ''),
+            'status': 'active', 'created_at': datetime.now().isoformat()
         }).execute()
-        
         supabase.table('chat_messages').insert({
-            'session_id': session_id,
-            'sender': 'system',
+            'session_id': session_id, 'sender': 'system',
             'message': f'Чат начат пользователем {data.get("name", "")} ({data.get("email", "")})',
             'created_at': datetime.now().isoformat()
         }).execute()
-        
         return jsonify({"status": "ok", "session_id": session_id}), 200
     except Exception as e:
         logger.error(f"Ошибка создания чата: {e}")
@@ -1209,15 +1216,11 @@ def start_chat():
 @app.route('/api/chat/message', methods=['POST'])
 def chat_message():
     data = request.json
-    
     try:
         supabase.table('chat_messages').insert({
-            'session_id': data.get('session_id', ''),
-            'sender': data.get('sender', 'user'),
-            'message': data.get('message', ''),
-            'created_at': datetime.now().isoformat()
+            'session_id': data.get('session_id', ''), 'sender': data.get('sender', 'user'),
+            'message': data.get('message', ''), 'created_at': datetime.now().isoformat()
         }).execute()
-        
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -1225,7 +1228,6 @@ def chat_message():
 @app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
     session_id = request.args.get('session_id', '')
-    
     try:
         response = supabase.table('chat_messages').select('*').eq('session_id', session_id).order('created_at', asc=True).execute()
         return jsonify({"status": "ok", "messages": response.data}), 200
@@ -1266,14 +1268,11 @@ def admin_chats():
             <h1>💬 Активные чаты</h1>
             <div class="card">
                 <table id="sessionsTable">
-                    <thead>
-                        <tr><th>ID</th><th>Имя</th><th>Email</th><th>Дата</th><th>Действия</th></tr>
-                    </thead>
+                    <thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Дата</th><th>Действия</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
         </div>
-        
         <div class="modal" id="chatModal">
             <div class="modal-content" style="width: 500px;">
                 <h2>Чат с клиентом</h2>
@@ -1288,84 +1287,44 @@ def admin_chats():
         <script>
             let currentSessionId = null;
             let adminPollingInterval = null;
-            
             async function loadSessions() {{
                 const response = await fetch('/api/chat/sessions');
                 const data = await response.json();
                 const tbody = document.querySelector('#sessionsTable tbody');
-                
                 tbody.innerHTML = (data.sessions || []).map(s => {{
                     const date = new Date(s.created_at);
-                    return `
-                        <tr>
-                            <td>${{s.id.slice(0, 8)}}...</td>
-                            <td><strong>${{s.name || '—'}}</strong></td>
-                            <td>${{s.email || '—'}}</td>
-                            <td>${{date.toLocaleString('ru-RU')}}</td>
-                            <td><button class="btn btn-info" onclick="openChat('${{s.id}}', '${{s.name}}')">💬</button></td>
-                        </tr>
-                    `;
+                    return `<tr><td>${{s.id.slice(0, 8)}}...</td><td><strong>${{s.name || '—'}}</strong></td><td>${{s.email || '—'}}</td><td>${{date.toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="openChat('${{s.id}}', '${{s.name}}')">💬</button></td></tr>`;
                 }}).join('');
             }}
-            
             function openChat(sessionId, name) {{
                 currentSessionId = sessionId;
                 document.getElementById('chatModal').style.display = 'flex';
                 document.getElementById('chatMessagesBox').innerHTML = '<div style="text-align: center; color: #999;">Загрузка...</div>';
-                loadChatMessages();
-                startAdminPolling();
+                loadChatMessages(); startAdminPolling();
             }}
-            
             async function loadChatMessages() {{
                 if (!currentSessionId) return;
                 const response = await fetch(`/api/chat/messages?session_id=${{currentSessionId}}`);
                 const data = await response.json();
-                
                 const box = document.getElementById('chatMessagesBox');
                 box.innerHTML = (data.messages || []).map(m => {{
                     const align = m.sender === 'user' ? 'right' : 'left';
                     const bg = m.sender === 'user' ? '#4a9eff' : '#00d4aa';
                     const color = m.sender === 'user' ? 'white' : '#000';
-                    return `<div style="text-align: ${{align}}; margin: 5px 0;">
-                        <span style="background: ${{bg}}; color: ${{color}}; padding: 8px 12px; border-radius: 12px; display: inline-block; max-width: 80%;">${{m.message}}</span>
-                    </div>`;
+                    return `<div style="text-align: ${{align}}; margin: 5px 0;"><span style="background: ${{bg}}; color: ${{color}}; padding: 8px 12px; border-radius: 12px; display: inline-block; max-width: 80%;">${{m.message}}</span></div>`;
                 }}).join('');
                 box.scrollTop = box.scrollHeight;
             }}
-            
             async function sendAdminMessage() {{
                 const input = document.getElementById('adminChatInput');
                 const message = input.value.trim();
                 if (!message || !currentSessionId) return;
-                
-                await fetch('/api/chat/message', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ session_id: currentSessionId, message, sender: 'admin' }})
-                }});
-                
-                input.value = '';
-                loadChatMessages();
+                await fetch('/api/chat/message', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ session_id: currentSessionId, message, sender: 'admin' }}) }});
+                input.value = ''; loadChatMessages();
             }}
-            
-            function startAdminPolling() {{
-                stopAdminPolling();
-                adminPollingInterval = setInterval(loadChatMessages, 3000);
-            }}
-            
-            function stopAdminPolling() {{
-                if (adminPollingInterval) {{
-                    clearInterval(adminPollingInterval);
-                    adminPollingInterval = null;
-                }}
-            }}
-            
-            function closeModal() {{
-                document.getElementById('chatModal').style.display = 'none';
-                stopAdminPolling();
-                currentSessionId = null;
-            }}
-            
+            function startAdminPolling() {{ stopAdminPolling(); adminPollingInterval = setInterval(loadChatMessages, 3000); }}
+            function stopAdminPolling() {{ if (adminPollingInterval) {{ clearInterval(adminPollingInterval); adminPollingInterval = null; }} }}
+            function closeModal() {{ document.getElementById('chatModal').style.display = 'none'; stopAdminPolling(); currentSessionId = null; }}
             function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
             loadSessions();
         </script>
