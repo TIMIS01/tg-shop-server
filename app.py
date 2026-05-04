@@ -320,14 +320,13 @@ def send_verification_code():
     if not email or '@' not in email:
         return jsonify({"status": "error", "message": "Некорректный email"}), 400
 
-    # ✅ НОВАЯ ПРОВЕРКА: если пользователь с такой почтой уже есть — запрещаем
+    # Проверка: если пользователь с такой почтой уже есть — запрещаем
     try:
         existing_user = supabase.table('users').select('id').eq('email', email).execute()
         if existing_user.data and len(existing_user.data) > 0:
             return jsonify({"status": "error", "message": "Пользователь с такой почтой уже зарегистрирован. Войдите или используйте другую почту."}), 409
     except Exception as e:
         logger.error(f"Ошибка проверки существующего пользователя: {e}")
-        # Если произошла ошибка проверки, продолжаем выполнение, чтобы не блокировать регистрацию
 
     # Генерируем 6-значный код
     code = str(random.randint(100000, 999999))
@@ -463,12 +462,10 @@ def webhook():
                 'created_at': datetime.now().isoformat()
             }
             
-            # Удаляем ключи со значением None, чтобы не пытаться вставить их в БД
             order_data = {k: v for k, v in order_data.items() if v is not None}
             
             response = supabase.table('orders').insert(order_data).execute()
             
-            # Отправка уведомления о новом заказе на почту
             order_notification_data = {
                 "order_id": response.data[0]['id'] if response.data else '—',
                 "product_name": data.get('productName', '—'),
@@ -656,7 +653,7 @@ def admin_products():
         </div>
         
         <div class="modal" id="productModal">
-            <div class="modal-content">
+            <div class="modal-content" style="width: 650px;">
                 <h2 id="modalTitle">Добавить товар</h2>
                 <form id="productForm">
                     <input type="hidden" id="productId">
@@ -673,6 +670,9 @@ def admin_products():
                     </div>
                     <label>Описание</label>
                     <textarea id="description" rows="4"></textarea>
+                    <label>🖼️ Ссылки на картинки (по одной на строку, до 5 штук)</label>
+                    <textarea id="images" rows="3" placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg"></textarea>
+                    <p style="font-size: 11px; color: #999; margin-top: 5px;">Загрузите картинки на любой хостинг (ImgBB, Cloudinary, и т.д.) и вставьте прямые ссылки. По одной ссылке на строку.</p>
                     <div style="margin-top: 20px; display: flex; gap: 10px;">
                         <button type="submit" class="btn btn-primary">Сохранить</button>
                         <button type="button" class="btn btn-danger" onclick="closeModal()">Отмена</button>
@@ -720,6 +720,7 @@ def admin_products():
                     document.getElementById('storage').value = product.storage || '';
                     document.getElementById('psu').value = product.psu || '';
                     document.getElementById('description').value = product.description || '';
+                    document.getElementById('images').value = (product.images || []).join('\\n');
                     document.getElementById('productModal').style.display = 'flex';
                 }}
             }}
@@ -733,6 +734,10 @@ def admin_products():
             
             document.getElementById('productForm').addEventListener('submit', async (e) => {{
                 e.preventDefault();
+                
+                const imagesRaw = document.getElementById('images').value.trim();
+                const images = imagesRaw ? imagesRaw.split('\\n').map(s => s.trim()).filter(s => s.length > 0) : [];
+                
                 const productData = {{
                     name: document.getElementById('name').value,
                     price: parseInt(document.getElementById('price').value),
@@ -742,7 +747,7 @@ def admin_products():
                     storage: document.getElementById('storage').value,
                     psu: document.getElementById('psu').value,
                     description: document.getElementById('description').value,
-                    images: []
+                    images: images
                 }};
                 
                 if (editingId) {{
@@ -968,30 +973,24 @@ def admin_users():
     </html>
     '''
 
-
-
 # ========== ВОССТАНОВЛЕНИЕ ПАРОЛЯ ==========
 reset_tokens = {}
 
 @app.route('/api/forgot-password', methods=['POST'])
 def forgot_password():
-    """Отправляет код восстановления пароля на почту."""
     data = request.json
     email = data.get('email', '').strip().lower()
 
     if not email or '@' not in email:
         return jsonify({"status": "error", "message": "Некорректный email"}), 400
 
-    # Проверяем, существует ли пользователь с такой почтой
     try:
         existing = supabase.table('users').select('id').eq('email', email).execute()
         if not existing.data:
-            # Не говорим, что пользователь не найден (безопасность)
             return jsonify({"status": "ok", "message": "Если такой email зарегистрирован, код отправлен"}), 200
     except:
         return jsonify({"status": "error", "message": "Ошибка сервера"}), 500
 
-    # Генерируем код и токен
     code = str(random.randint(100000, 999999))
     reset_token = hashlib.sha256(f"{SECRET_KEY}{email}{time.time()}".encode()).hexdigest()
 
@@ -1018,10 +1017,8 @@ def forgot_password():
     else:
         return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
 
-
 @app.route('/api/verify-reset-code', methods=['POST'])
 def verify_reset_code():
-    """Проверяет код восстановления пароля."""
     data = request.json
     email = data.get('email', '').strip().lower()
     code = data.get('code', '').strip()
@@ -1050,10 +1047,8 @@ def verify_reset_code():
     else:
         return jsonify({"status": "error", "message": "Неверный код"}), 400
 
-
 @app.route('/api/reset-password', methods=['POST'])
 def reset_password():
-    """Устанавливает новый пароль."""
     data = request.json
     email = data.get('email', '').strip().lower()
     password = data.get('password', '')
@@ -1078,18 +1073,10 @@ def reset_password():
     except Exception as e:
         logger.error(f"Ошибка смены пароля: {e}")
         return jsonify({"status": "error", "message": "Ошибка смены пароля"}), 500
-    
-
-
-
-
-
-
 
 # ========== ПОДДЕРЖКА ==========
 @app.route('/api/support', methods=['POST'])
 def support_message():
-    """Сохраняет обращение в поддержку."""
     data = request.json
     try:
         supabase.table('support_messages').insert({
@@ -1100,7 +1087,6 @@ def support_message():
             'created_at': datetime.now().isoformat()
         }).execute()
         
-        # Отправляем уведомление тебе на почту
         notification_data = {
             "order_id": f"SUPPORT-{datetime.now().strftime('%H%M%S')}",
             "product_name": f"Запрос от {data.get('name', '—')} ({data.get('email', '—')})",
@@ -1119,18 +1105,11 @@ def support_message():
 
 @app.route('/api/support', methods=['GET'])
 def get_support_messages():
-    """Получает все обращения в поддержку."""
     try:
         response = supabase.table('support_messages').select('*').order('created_at', desc=True).execute()
         return jsonify({"status": "ok", "messages": response.data})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
-
-
-
-
-
 
 @app.route('/admin/support')
 def admin_support():
@@ -1150,8 +1129,8 @@ def admin_support():
             <a href="/admin/products">📦 Товары</a>
             <a href="/admin/orders">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
-            <a href="/admin/support">💬 Поддержка</a>
-            <a href="/admin/chats" class="active">💬 Чаты</a>
+            <a href="/admin/support" class="active">💬 Поддержка</a>
+            <a href="/admin/chats">💬 Чаты</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
         <div class="content">
@@ -1198,16 +1177,11 @@ def admin_support():
     </html>
     '''
 
-
-
-
-
 # ========== ЧАТ ПОДДЕРЖКИ ==========
 import uuid
 
 @app.route('/api/chat/start', methods=['POST'])
 def start_chat():
-    """Начинает новую сессию чата."""
     data = request.json
     session_id = str(uuid.uuid4())
     
@@ -1220,7 +1194,6 @@ def start_chat():
             'created_at': datetime.now().isoformat()
         }).execute()
         
-        # Первое сообщение
         supabase.table('chat_messages').insert({
             'session_id': session_id,
             'sender': 'system',
@@ -1235,7 +1208,6 @@ def start_chat():
 
 @app.route('/api/chat/message', methods=['POST'])
 def chat_message():
-    """Отправляет сообщение в чат."""
     data = request.json
     
     try:
@@ -1252,7 +1224,6 @@ def chat_message():
 
 @app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
-    """Получает сообщения чата по session_id."""
     session_id = request.args.get('session_id', '')
     
     try:
@@ -1263,13 +1234,11 @@ def get_chat_messages():
 
 @app.route('/api/chat/sessions', methods=['GET'])
 def get_chat_sessions():
-    """Получает все активные сессии чата."""
     try:
         response = supabase.table('chat_sessions').select('*').eq('status', 'active').order('created_at', desc=True).execute()
         return jsonify({"status": "ok", "sessions": response.data}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
 
 @app.route('/admin/chats')
 def admin_chats():
