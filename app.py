@@ -569,7 +569,7 @@ def admin_dashboard():
             <a href="/admin/orders">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
             <a href="/admin/support">💬 Поддержка</a>
-            <a href="/admin/chats" class="active">💬 Чаты</a>
+            <a href="/admin/chats">💬 Чаты</a>
             <a href="#" onclick="logout()" style="margin-top: auto;">🚪 Выйти</a>
         </div>
         <div class="content">
@@ -639,7 +639,7 @@ def admin_products():
             <a href="/admin/orders">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
             <a href="/admin/support">💬 Поддержка</a>
-            <a href="/admin/chats" class="active">💬 Чаты</a>
+            <a href="/admin/chats">💬 Чаты</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
         <div class="content">
@@ -780,7 +780,7 @@ def admin_orders():
             <a href="/admin/orders" class="active">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
             <a href="/admin/support">💬 Поддержка</a>
-            <a href="/admin/chats" class="active">💬 Чаты</a>
+            <a href="/admin/chats">💬 Чаты</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
         <div class="content">
