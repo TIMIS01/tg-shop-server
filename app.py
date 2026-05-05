@@ -1132,6 +1132,65 @@ def cleanup_old_chats():
 
 
 
+# ========== ПЛАТЕЖИ LAVA ==========
+@app.route('/api/create-payment', methods=['POST'])
+def create_payment():
+    """Создаёт платёж через Lava.ru."""
+    data = request.json
+    LAVA_API_KEY = os.environ.get("LAVA_API_KEY", "")
+
+    if not LAVA_API_KEY:
+        return jsonify({"status": "error", "message": "Платежи временно недоступны"}), 503
+
+    try:
+        import requests as http_requests
+        import uuid
+
+        order_id = str(uuid.uuid4())
+        amount = float(data.get('amount', 0))
+        product_name = data.get('product_name', 'Заказ')
+
+        payload = {
+            "shop_id": LAVA_API_KEY,
+            "order_id": order_id,
+            "amount": amount,
+            "currency": "RUB",
+            "comment": product_name,
+            "fail_url": "https://pcggpro.ru/checkout.html?status=fail",
+            "success_url": "https://pcggpro.ru/checkout.html?status=success"
+        }
+
+        response = http_requests.post(
+            "https://api.lava.ru/business/merchant/invoice/create",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {LAVA_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("data", {}).get("url"):
+                return jsonify({
+                    "status": "ok",
+                    "payment_url": result["data"]["url"],
+                    "order_id": order_id
+                }), 200
+
+        logger.error(f"❌ Ошибка Lava: {response.status_code} - {response.text}")
+        return jsonify({"status": "error", "message": "Не удалось создать платёж"}), 500
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания платежа: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
+
+
+
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
