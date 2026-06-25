@@ -433,7 +433,7 @@ def login_user():
 # ========== ВЕБХУК ДЛЯ БОТА И САЙТА ==========
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
-    cleanup_old_chats()  # ← ДОБАВЬ ЭТУ СТРОКУ
+    cleanup_old_chats()
     try:
         data = request.json
         logger.info(f"📥 Получены данные из Mini App: {data}")
@@ -551,6 +551,7 @@ def admin_dashboard():
             <h2>🖥️ PC Shop</h2>
             <a href="/admin/dashboard" class="active">📊 Дашборд</a>
             <a href="/admin/products">📦 Товары</a>
+            <a href="/admin/components">🔧 Комплектующие</a>
             <a href="/admin/orders">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
             <a href="/admin/support">💬 Поддержка</a>
@@ -561,8 +562,8 @@ def admin_dashboard():
             <h1>📊 Дашборд</h1>
             <div class="stats">
                 <div class="stat-card"><h3 id="productsCount">0</h3><p>Товаров в каталоге</p></div>
+                <div class="stat-card"><h3 id="componentsCount">0</h3><p>Комплектующих</p></div>
                 <div class="stat-card"><h3 id="ordersCount">0</h3><p>Всего заказов</p></div>
-                <div class="stat-card"><h3 id="newOrdersCount">0</h3><p>Новых заказов</p></div>
                 <div class="stat-card"><h3 id="revenueCount">0 ₽</h3><p>Выручка</p></div>
             </div>
         </div>
@@ -570,10 +571,11 @@ def admin_dashboard():
             async function loadStats() {{
                 const productsRes = await fetch('/api/products'); const productsData = await productsRes.json();
                 document.getElementById('productsCount').textContent = productsData.products?.length || 0;
+                const compRes = await fetch('/api/components'); const compData = await compRes.json();
+                document.getElementById('componentsCount').textContent = compData.components?.length || 0;
                 const ordersRes = await fetch('/api/orders'); const ordersData = await ordersRes.json();
                 const orders = ordersData.orders || [];
                 document.getElementById('ordersCount').textContent = orders.length;
-                document.getElementById('newOrdersCount').textContent = orders.filter(o => o.status === 'оформлен').length;
                 document.getElementById('revenueCount').textContent = orders.reduce((sum, o) => sum + (o.total_price || 0), 0).toLocaleString() + ' ₽';
             }}
             function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
@@ -599,6 +601,7 @@ def admin_products():
             <h2>🖥️ PC Shop</h2>
             <a href="/admin/dashboard">📊 Дашборд</a>
             <a href="/admin/products" class="active">📦 Товары</a>
+            <a href="/admin/components">🔧 Комплектующие</a>
             <a href="/admin/orders">🛒 Заказы</a>
             <a href="/admin/users">👥 Пользователи</a>
             <a href="/admin/support">💬 Поддержка</a>
@@ -733,7 +736,6 @@ def admin_products():
                 btn.textContent = '⏳ Сжатие и сохранение...';
                 btn.disabled = true;
                 
-                // Сжимаем картинки перед отправкой
                 const imagePromises = selectedImages.map(file => compressImage(file, 800, 800, 0.6));
                 const images = await Promise.all(imagePromises);
                 
@@ -765,6 +767,362 @@ def admin_products():
     </html>
     '''
 
+@app.route('/admin/components')
+def admin_components():
+    return f'''
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Комплектующие | Админ-панель</title>
+        {ADMIN_CSS}
+        <style>
+            .filter-bar {{
+                display: flex;
+                gap: 15px;
+                margin-bottom: 20px;
+                flex-wrap: wrap;
+            }}
+            .filter-bar select, .filter-bar input {{
+                padding: 10px 16px;
+                border: 2px solid #ddd;
+                border-radius: 10px;
+                font-family: inherit;
+                font-size: 14px;
+                background: white;
+            }}
+            .filter-bar select:focus, .filter-bar input:focus {{
+                outline: none;
+                border-color: var(--primary);
+            }}
+            .component-type-badge {{
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            .component-type-badge.cpu {{ background: #dbeafe; color: #2563eb; }}
+            .component-type-badge.gpu {{ background: #fce4ec; color: #d32f2f; }}
+            .component-type-badge.motherboard {{ background: #e8f5e9; color: #2e7d32; }}
+            .component-type-badge.ram {{ background: #fff3e0; color: #e65100; }}
+        </style>
+    </head>
+    <body>
+        <div class="sidebar">
+            <h2>🖥️ PC Shop</h2>
+            <a href="/admin/dashboard">📊 Дашборд</a>
+            <a href="/admin/products">📦 Товары</a>
+            <a href="/admin/components" class="active">🔧 Комплектующие</a>
+            <a href="/admin/orders">🛒 Заказы</a>
+            <a href="/admin/users">👥 Пользователи</a>
+            <a href="/admin/support">💬 Поддержка</a>
+            <a href="/admin/chats">💬 Чаты</a>
+            <a href="#" onclick="logout()">🚪 Выйти</a>
+        </div>
+        <div class="content">
+            <h1>🔧 Управление комплектующими</h1>
+            <div class="filter-bar">
+                <select id="typeFilter" onchange="loadComponents()">
+                    <option value="">Все типы</option>
+                    <option value="cpu">🖥️ Процессоры</option>
+                    <option value="gpu">🎮 Видеокарты</option>
+                    <option value="motherboard">🔌 Материнские платы</option>
+                    <option value="ram">🧠 ОЗУ</option>
+                </select>
+                <button class="btn btn-success" onclick="openAddModal()">+ Добавить комплектующее</button>
+            </div>
+            <div class="card">
+                <table id="componentsTable">
+                    <thead>
+                        <tr><th>Тип</th><th>Название</th><th>Цена</th><th>Сокет</th><th>Тип RAM</th><th>Действия</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="modal" id="componentModal">
+            <div class="modal-content" style="width: 600px;">
+                <h2 id="modalTitle">Добавить комплектующее</h2>
+                <form id="componentForm">
+                    <input type="hidden" id="editId">
+                    <div class="detail-grid" style="grid-template-columns:1fr 1fr;">
+                        <div>
+                            <label>Тип *</label>
+                            <select id="compType" required>
+                                <option value="cpu">Процессор</option>
+                                <option value="gpu">Видеокарта</option>
+                                <option value="motherboard">Материнская плата</option>
+                                <option value="ram">ОЗУ</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>Название *</label>
+                            <input type="text" id="compName" required>
+                        </div>
+                        <div>
+                            <label>Цена (₽) *</label>
+                            <input type="number" id="compPrice" required>
+                        </div>
+                        <div>
+                            <label>Сокет</label>
+                            <input type="text" id="compSocket" placeholder="lga1700, am4, am5, pcie4">
+                        </div>
+                        <div>
+                            <label>Тип RAM</label>
+                            <select id="compRamType">
+                                <option value="">Не указан</option>
+                                <option value="ddr4">DDR4</option>
+                                <option value="ddr5">DDR5</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>Уровень совместимости</label>
+                            <select id="compCompat">
+                                <option value="">Не указан</option>
+                                <option value="budget">Бюджетный</option>
+                                <option value="mid">Средний</option>
+                                <option value="high">Высокий</option>
+                                <option value="ultra">Ультра</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="margin-top:20px;display:flex;gap:10px;">
+                        <button type="button" class="btn btn-primary" onclick="saveComponent()">💾 Сохранить</button>
+                        <button type="button" class="btn btn-danger" onclick="closeModal()">Отмена</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="modal" id="compatModal">
+            <div class="modal-content" style="width: 600px;">
+                <h2>🔗 Управление совместимостью</h2>
+                <p style="color:var(--text-light);margin-bottom:15px;">Выберите, с чем совместим <strong id="compatComponentName"></strong></p>
+                <div id="compatList" style="margin-bottom:15px;"></div>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <select id="compatTypeSelect" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;">
+                        <option value="">Выберите тип</option>
+                        <option value="motherboard">Материнская плата</option>
+                        <option value="ram">ОЗУ</option>
+                        <option value="cpu">Процессор</option>
+                        <option value="gpu">Видеокарта</option>
+                    </select>
+                    <select id="compatItemSelect" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;">
+                        <option value="">Сначала выберите тип</option>
+                    </select>
+                    <button class="btn btn-success" onclick="addCompatibility()">➕ Добавить</button>
+                </div>
+                <div style="margin-top:20px;display:flex;gap:10px;">
+                    <button class="btn btn-danger" onclick="closeCompatModal()">Закрыть</button>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            let currentComponentId = null;
+            let allComponents = [];
+
+            async function loadComponents() {{
+                const type = document.getElementById('typeFilter').value;
+                const url = type ? `/api/components?type=${type}` : '/api/components';
+                const response = await fetch(url);
+                const data = await response.json();
+                allComponents = data.components || [];
+                renderTable(allComponents);
+            }}
+
+            function renderTable(components) {{
+                const tbody = document.querySelector('#componentsTable tbody');
+                if (!components.length) {{
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;">Нет комплектующих</td></tr>';
+                    return;
+                }}
+                const typeLabels = {{ cpu: 'Процессор', gpu: 'Видеокарта', motherboard: 'Материнская плата', ram: 'ОЗУ' }};
+                const typeClasses = {{ cpu: 'cpu', gpu: 'gpu', motherboard: 'motherboard', ram: 'ram' }};
+                tbody.innerHTML = components.map(c => `
+                    <tr>
+                        <td><span class="component-type-badge ${typeClasses[c.type] || ''}">${typeLabels[c.type] || c.type}</span></td>
+                        <td><strong>${c.name}</strong></td>
+                        <td>${c.price.toLocaleString()} ₽</td>
+                        <td>${c.socket || '—'}</td>
+                        <td>${c.ram_type || '—'}</td>
+                        <td>
+                            <button class="btn btn-primary" onclick="editComponent('${c.id}')">✏️</button>
+                            <button class="btn btn-info" onclick="openCompatModal('${c.id}')">🔗</button>
+                            <button class="btn btn-danger" onclick="deleteComponent('${c.id}')">🗑️</button>
+                        </td>
+                    </tr>
+                `).join('');
+            }}
+
+            function openAddModal() {{
+                document.getElementById('modalTitle').textContent = '➕ Добавить комплектующее';
+                document.getElementById('componentForm').reset();
+                document.getElementById('editId').value = '';
+                document.getElementById('componentModal').style.display = 'flex';
+            }}
+
+            async function editComponent(id) {{
+                const comp = allComponents.find(c => c.id === id);
+                if (!comp) return;
+                document.getElementById('modalTitle').textContent = '✏️ Редактировать комплектующее';
+                document.getElementById('editId').value = comp.id;
+                document.getElementById('compType').value = comp.type;
+                document.getElementById('compName').value = comp.name;
+                document.getElementById('compPrice').value = comp.price;
+                document.getElementById('compSocket').value = comp.socket || '';
+                document.getElementById('compRamType').value = comp.ram_type || '';
+                document.getElementById('compCompat').value = comp.compat || '';
+                document.getElementById('componentModal').style.display = 'flex';
+            }}
+
+            async function saveComponent() {{
+                const id = document.getElementById('editId').value;
+                const data = {{
+                    type: document.getElementById('compType').value,
+                    name: document.getElementById('compName').value.trim(),
+                    price: parseInt(document.getElementById('compPrice').value),
+                    socket: document.getElementById('compSocket').value.trim(),
+                    ram_type: document.getElementById('compRamType').value,
+                    compat: document.getElementById('compCompat').value
+                }};
+                if (!data.name || !data.price) {{ alert('Заполните название и цену!'); return; }}
+
+                const url = id ? `/api/components/${id}` : '/api/components';
+                const method = id ? 'PUT' : 'POST';
+                const response = await fetch(url, {{ method, headers: {{'Content-Type':'application/json'}}, body: JSON.stringify(data) }});
+                if (response.ok) {{
+                    closeModal();
+                    loadComponents();
+                    alert(id ? '✅ Обновлено!' : '✅ Добавлено!');
+                }} else {{
+                    alert('❌ Ошибка сохранения');
+                }}
+            }}
+
+            async function deleteComponent(id) {{
+                if (!confirm('Удалить комплектующее навсегда?')) return;
+                const response = await fetch(`/api/components/${id}`, {{ method: 'DELETE' }});
+                if (response.ok) {{ loadComponents(); alert('✅ Удалено!'); }}
+            }}
+
+            function closeModal() {{
+                document.getElementById('componentModal').style.display = 'none';
+            }}
+
+            // === Совместимость ===
+            async function openCompatModal(componentId) {{
+                currentComponentId = componentId;
+                const comp = allComponents.find(c => c.id === componentId);
+                if (!comp) return;
+                document.getElementById('compatComponentName').textContent = comp.name;
+                document.getElementById('compatModal').style.display = 'flex';
+                await loadCompatList(componentId);
+            }}
+
+            async function loadCompatList(componentId) {{
+                const comp = allComponents.find(c => c.id === componentId);
+                if (!comp) return;
+                const response = await fetch(`/api/compatibility?type=${comp.type}&id=${componentId}`);
+                const data = await response.json();
+                const links = data.links || [];
+                const container = document.getElementById('compatList');
+                if (!links.length) {{
+                    container.innerHTML = '<p style="color:var(--text-light);">Нет связей совместимости</p>';
+                    return;
+                }}
+                const typeLabels = {{ cpu: 'Процессор', gpu: 'Видеокарта', motherboard: 'Материнская плата', ram: 'ОЗУ' }};
+                // Получаем названия совместимых компонентов
+                const compatItems = await Promise.all(links.map(async (link) => {{
+                    const resp = await fetch(`/api/components?type=${link.compatible_type}`);
+                    const data = await resp.json();
+                    const comp = data.components.find(c => c.id === link.compatible_id);
+                    return {{
+                        ...link,
+                        compatible_name: comp ? comp.name : link.compatible_id
+                    }};
+                }}));
+                
+                container.innerHTML = compatItems.map(l => `
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
+                        <span>${typeLabels[l.compatible_type] || l.compatible_type}: <strong>${l.compatible_name}</strong></span>
+                        <button class="btn btn-danger" onclick="removeCompatibility('${l.id}')" style="padding:4px 12px;">✕</button>
+                    </div>
+                `).join('');
+            }}
+
+            async function addCompatibility() {{
+                const type = document.getElementById('compatTypeSelect').value;
+                const itemId = document.getElementById('compatItemSelect').value;
+                if (!type || !itemId) {{ alert('Выберите тип и комплектующее'); return; }}
+                const comp = allComponents.find(c => c.id === currentComponentId);
+                if (!comp) return;
+
+                const response = await fetch('/api/compatibility', {{
+                    method: 'POST',
+                    headers: {{'Content-Type':'application/json'}},
+                    body: JSON.stringify({{
+                        component_type: comp.type,
+                        component_id: currentComponentId,
+                        compatible_type: type,
+                        compatible_id: itemId
+                    }})
+                }});
+                if (response.ok) {{
+                    await loadCompatList(currentComponentId);
+                    alert('✅ Связь добавлена!');
+                }} else {{
+                    alert('❌ Ошибка добавления связи');
+                }}
+            }}
+
+            async function removeCompatibility(linkId) {{
+                if (!confirm('Удалить связь?')) return;
+                const response = await fetch(`/api/compatibility/${linkId}`, {{ method: 'DELETE' }});
+                if (response.ok) {{
+                    await loadCompatList(currentComponentId);
+                    alert('✅ Связь удалена!');
+                }}
+            }}
+
+            function closeCompatModal() {{
+                document.getElementById('compatModal').style.display = 'none';
+                currentComponentId = null;
+            }}
+
+            // Загрузка списка компонентов для совместимости
+            document.getElementById('compatTypeSelect').addEventListener('change', function() {{
+                const type = this.value;
+                const select = document.getElementById('compatItemSelect');
+                select.innerHTML = '<option value="">Загрузка...</option>';
+                fetch(`/api/components?type=${type}`)
+                    .then(r => r.json())
+                    .then(data => {{
+                        select.innerHTML = '<option value="">Выберите комплектующее</option>';
+                        (data.components || []).forEach(c => {{
+                            select.innerHTML += `<option value="${{c.id}}">${{c.name}}</option>`;
+                        }});
+                    }});
+            }});
+
+            // Закрытие модалок по клику вне
+            document.querySelectorAll('.modal').forEach(m => {{
+                m.addEventListener('click', function(e) {{
+                    if (e.target === this) {{
+                        this.style.display = 'none';
+                    }}
+                }});
+            }});
+
+            function logout() {{ localStorage.removeItem('admin_token'); window.location.href = '/admin'; }}
+            loadComponents();
+        </script>
+    </body>
+    </html>
+    '''
+
 @app.route('/admin/orders')
 def admin_orders():
     return f'''
@@ -775,6 +1133,7 @@ def admin_orders():
         <div class="sidebar">
             <h2>🖥️ PC Shop</h2>
             <a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a>
+            <a href="/admin/components">🔧 Комплектующие</a>
             <a href="/admin/orders" class="active">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a>
             <a href="/admin/support">💬 Поддержка</a><a href="/admin/chats">💬 Чаты</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
@@ -824,6 +1183,7 @@ def admin_users():
         <div class="sidebar">
             <h2>🖥️ PC Shop</h2>
             <a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a>
+            <a href="/admin/components">🔧 Комплектующие</a>
             <a href="/admin/orders">🛒 Заказы</a><a href="/admin/users" class="active">👥 Пользователи</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
@@ -910,7 +1270,7 @@ def get_support_messages():
 def admin_support():
     return f'''
     <!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Поддержка | Админ-панель</title>{ADMIN_CSS}</head>
-    <body><div class="sidebar"><h2>🖥️ PC Shop</h2><a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a><a href="/admin/orders">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a><a href="/admin/support" class="active">💬 Поддержка</a><a href="/admin/chats">💬 Чаты</a><a href="#" onclick="logout()">🚪 Выйти</a></div>
+    <body><div class="sidebar"><h2>🖥️ PC Shop</h2><a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a><a href="/admin/components">🔧 Комплектующие</a><a href="/admin/orders">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a><a href="/admin/support" class="active">💬 Поддержка</a><a href="/admin/chats">💬 Чаты</a><a href="#" onclick="logout()">🚪 Выйти</a></div>
     <div class="content"><h1>💬 Запросы в поддержку</h1><div class="card"><table id="supportTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Сообщение</th><th>Статус</th><th>Дата</th></tr></thead><tbody></tbody></table></div></div>
     <script>
         async function loadMessages() {{
@@ -933,7 +1293,6 @@ def start_chat():
     email = data.get('email', '')
 
     try:
-        # Создаём сессию
         supabase.table('chat_sessions').insert({
             'id': session_id,
             'name': name,
@@ -942,7 +1301,6 @@ def start_chat():
             'created_at': datetime.now().isoformat()
         }).execute()
 
-        # Добавляем системное сообщение
         supabase.table('chat_messages').insert({
             'session_id': session_id,
             'sender': 'system',
@@ -975,7 +1333,6 @@ def chat_message():
             'created_at': datetime.now().isoformat()
         }
 
-        # Если есть файл — сохраняем ссылку
         if data.get('file_data'):
             message_data['file_url'] = data.get('file_data', '')
             message_data['file_name'] = data.get('file_name', '')
@@ -1029,7 +1386,7 @@ def get_chat_sessions():
 def admin_chats():
     return f'''
     <!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Чаты | Админ-панель</title>{ADMIN_CSS}</head>
-    <body><div class="sidebar"><h2>🖥️ PC Shop</h2><a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a><a href="/admin/orders">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a><a href="/admin/support">💬 Поддержка</a><a href="/admin/chats" class="active">💬 Чаты</a><a href="#" onclick="logout()">🚪 Выйти</a></div>
+    <body><div class="sidebar"><h2>🖥️ PC Shop</h2><a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a><a href="/admin/components">🔧 Комплектующие</a><a href="/admin/orders">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a><a href="/admin/support">💬 Поддержка</a><a href="/admin/chats" class="active">💬 Чаты</a><a href="#" onclick="logout()">🚪 Выйти</a></div>
     <div class="content"><h1>💬 Активные чаты</h1><button class="btn btn-primary" onclick="loadSessions()" style="margin-bottom:15px;">🔄 Обновить</button><div class="card"><table id="sessionsTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Дата</th><th>Действия</th></tr></thead><tbody></tbody></table></div></div>
     <div class="modal" id="chatModal"><div class="modal-content" style="width:500px;"><h2>Чат с клиентом</h2><div id="chatMessagesBox" style="height:300px;overflow-y:auto;padding:10px;background:#f5f5f5;border-radius:8px;margin-bottom:15px;"></div><div style="display:flex;gap:10px;align-items:center;"><input type="text" id="adminChatInput" placeholder="Ваш ответ..." style="flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;"><button class="btn btn-primary" onclick="sendAdminMessage()" style="height:40px;">Отправить</button></div><button class="btn btn-danger" onclick="closeModal()" style="margin-top:10px;">Закрыть</button></div></div>
     <script>
@@ -1064,7 +1421,6 @@ def admin_chats():
                         const bg = m.sender==='user' ? '#4a9eff' : (m.sender==='admin' ? '#00d4aa' : '#ccc');
                         const color = m.sender==='user' ? 'white' : (m.sender==='admin' ? '#000' : '#666');
                         
-                        // Проверяем, является ли сообщение файлом
                         let messageHtml = '';
                         if (m.file_url && m.file_type) {{
                             if (m.file_type.startsWith('image/')) {{
@@ -1103,36 +1459,145 @@ def admin_chats():
         loadSessions();
     </script></body></html>'''
 
-
-
-
-
-
 def cleanup_old_chats():
     """Удаляет чаты и сообщения старше 7 дней."""
     try:
         seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
         
-        # Находим старые сессии
         old_sessions = supabase.table('chat_sessions').select('id').lt('created_at', seven_days_ago).execute()
         
         if old_sessions.data:
             for session in old_sessions.data:
                 session_id = session['id']
-                # Удаляем сообщения
                 supabase.table('chat_messages').delete().eq('session_id', session_id).execute()
-                # Удаляем сессию
                 supabase.table('chat_sessions').delete().eq('id', session_id).execute()
             
             logger.info(f"🗑️ Удалено {len(old_sessions.data)} старых чатов (старше 7 дней)")
     except Exception as e:
         logger.error(f"❌ Ошибка очистки старых чатов: {e}")
 
+# ============================================================
+# API ДЛЯ КОМПЛЕКТУЮЩИХ
+# ============================================================
 
+@app.route('/api/components', methods=['GET'])
+def get_components():
+    """Получает все комплектующие с возможностью фильтрации по типу."""
+    comp_type = request.args.get('type', '')
+    try:
+        query = supabase.table('components').select('*').eq('is_active', True)
+        if comp_type:
+            query = query.eq('type', comp_type)
+        response = query.execute()
+        return jsonify({"status": "ok", "components": response.data})
+    except Exception as e:
+        logger.error(f"Ошибка получения комплектующих: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/api/components', methods=['POST'])
+def add_component():
+    """Добавляет новое комплектующее."""
+    data = request.json
+    try:
+        response = supabase.table('components').insert({
+            'type': data['type'],
+            'name': data['name'],
+            'price': int(data['price']),
+            'socket': data.get('socket', ''),
+            'ram_type': data.get('ram_type', ''),
+            'form_factor': data.get('form_factor', ''),
+            'capacity': data.get('capacity', ''),
+            'speed': data.get('speed', 0),
+            'compat': data.get('compat', ''),
+            'is_active': True
+        }).execute()
+        return jsonify({"status": "ok", "component": response.data[0]})
+    except Exception as e:
+        logger.error(f"Ошибка добавления комплектующего: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/api/components/<uuid:component_id>', methods=['PUT'])
+def update_component(component_id):
+    """Обновляет комплектующее."""
+    data = request.json
+    try:
+        updates = {}
+        fields = ['name', 'price', 'socket', 'ram_type', 'form_factor', 'capacity', 'speed', 'compat', 'is_active']
+        for field in fields:
+            if field in data:
+                updates[field] = data[field]
+        if updates:
+            supabase.table('components').update(updates).eq('id', str(component_id)).execute()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Ошибка обновления комплектующего: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-# ========== ПЛАТЕЖИ LAVA ==========
+@app.route('/api/components/<uuid:component_id>', methods=['DELETE'])
+def delete_component(component_id):
+    """Мягкое удаление комплектующего."""
+    try:
+        supabase.table('components').update({'is_active': False}).eq('id', str(component_id)).execute()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Ошибка удаления комплектующего: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ============================================================
+# API ДЛЯ СВЯЗЕЙ СОВМЕСТИМОСТИ
+# ============================================================
+
+@app.route('/api/compatibility', methods=['GET'])
+def get_compatibility():
+    """Получает все связи совместимости для компонента."""
+    comp_type = request.args.get('type', '')
+    comp_id = request.args.get('id', '')
+    compatible_type = request.args.get('compatible_type', '')
+    
+    try:
+        query = supabase.table('compatibility_links').select('*')
+        if comp_type and comp_id:
+            query = query.eq('component_type', comp_type).eq('component_id', comp_id)
+        elif comp_type and compatible_type:
+            query = query.eq('component_type', comp_type).eq('compatible_type', compatible_type)
+        elif comp_type:
+            query = query.eq('component_type', comp_type)
+        
+        response = query.execute()
+        return jsonify({"status": "ok", "links": response.data})
+    except Exception as e:
+        logger.error(f"Ошибка получения связей: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/compatibility', methods=['POST'])
+def add_compatibility():
+    """Добавляет связь совместимости между компонентами."""
+    data = request.json
+    try:
+        response = supabase.table('compatibility_links').insert({
+            'component_type': data['component_type'],
+            'component_id': data['component_id'],
+            'compatible_type': data['compatible_type'],
+            'compatible_id': data['compatible_id']
+        }).execute()
+        return jsonify({"status": "ok", "link": response.data[0]})
+    except Exception as e:
+        logger.error(f"Ошибка добавления связи: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/compatibility/<uuid:link_id>', methods=['DELETE'])
+def delete_compatibility(link_id):
+    """Удаляет связь совместимости."""
+    try:
+        supabase.table('compatibility_links').delete().eq('id', str(link_id)).execute()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Ошибка удаления связи: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ============================================================
+# API ДЛЯ ПЛАТЕЖЕЙ LAVA
+# ============================================================
 @app.route('/api/create-payment', methods=['POST'])
 def create_payment():
     """Создаёт платёж через Lava.ru."""
@@ -1185,12 +1650,6 @@ def create_payment():
     except Exception as e:
         logger.error(f"❌ Ошибка создания платежа: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
-
-
-
-
-
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
