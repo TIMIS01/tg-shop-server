@@ -943,15 +943,15 @@ def admin_components():
                 const typeClasses = {{ cpu: 'cpu', gpu: 'gpu', motherboard: 'motherboard', ram: 'ram' }};
                 tbody.innerHTML = components.map(c => `
                     <tr>
-                        <td><span class="component-type-badge ${typeClasses[c.type] || ''}">${typeLabels[c.type] || c.type}</span></td>
-                        <td><strong>${c.name}</strong></td>
-                        <td>${c.price.toLocaleString()} ₽</td>
-                        <td>${c.socket || '—'}</td>
-                        <td>${c.ram_type || '—'}</td>
+                        <td><span class="component-type-badge ${{typeClasses[c.type] || ''}}">${{typeLabels[c.type] || c.type}}</span></td>
+                        <td><strong>${{c.name}}</strong></td>
+                        <td>${{c.price.toLocaleString()}} ₽</td>
+                        <td>${{c.socket || '—'}}</td>
+                        <td>${{c.ram_type || '—'}}</td>
                         <td>
-                            <button class="btn btn-primary" onclick="editComponent('${c.id}')">✏️</button>
-                            <button class="btn btn-info" onclick="openCompatModal('${c.id}')">🔗</button>
-                            <button class="btn btn-danger" onclick="deleteComponent('${c.id}')">🗑️</button>
+                            <button class="btn btn-primary" onclick="editComponent('${{c.id}}')">✏️</button>
+                            <button class="btn btn-info" onclick="openCompatModal('${{c.id}}')">🔗</button>
+                            <button class="btn btn-danger" onclick="deleteComponent('${{c.id}}')">🗑️</button>
                         </td>
                     </tr>
                 `).join('');
@@ -990,7 +990,7 @@ def admin_components():
                 }};
                 if (!data.name || !data.price) {{ alert('Заполните название и цену!'); return; }}
 
-                const url = id ? `/api/components/${id}` : '/api/components';
+                const url = id ? `/api/components/${{id}}` : '/api/components';
                 const method = id ? 'PUT' : 'POST';
                 const response = await fetch(url, {{ method, headers: {{'Content-Type':'application/json'}}, body: JSON.stringify(data) }});
                 if (response.ok) {{
@@ -1004,7 +1004,7 @@ def admin_components():
 
             async function deleteComponent(id) {{
                 if (!confirm('Удалить комплектующее навсегда?')) return;
-                const response = await fetch(`/api/components/${id}`, {{ method: 'DELETE' }});
+                const response = await fetch(`/api/components/${{id}}`, {{ method: 'DELETE' }});
                 if (response.ok) {{ loadComponents(); alert('✅ Удалено!'); }}
             }}
 
@@ -1025,7 +1025,7 @@ def admin_components():
             async function loadCompatList(componentId) {{
                 const comp = allComponents.find(c => c.id === componentId);
                 if (!comp) return;
-                const response = await fetch(`/api/compatibility?type=${comp.type}&id=${componentId}`);
+                const response = await fetch(`/api/compatibility?type=${{comp.type}}&id=${{componentId}}`);
                 const data = await response.json();
                 const links = data.links || [];
                 const container = document.getElementById('compatList');
@@ -1036,7 +1036,7 @@ def admin_components():
                 const typeLabels = {{ cpu: 'Процессор', gpu: 'Видеокарта', motherboard: 'Материнская плата', ram: 'ОЗУ' }};
                 // Получаем названия совместимых компонентов
                 const compatItems = await Promise.all(links.map(async (link) => {{
-                    const resp = await fetch(`/api/components?type=${link.compatible_type}`);
+                    const resp = await fetch(`/api/components?type=${{link.compatible_type}}`);
                     const data = await resp.json();
                     const comp = data.components.find(c => c.id === link.compatible_id);
                     return {{
@@ -1047,8 +1047,8 @@ def admin_components():
                 
                 container.innerHTML = compatItems.map(l => `
                     <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
-                        <span>${typeLabels[l.compatible_type] || l.compatible_type}: <strong>${l.compatible_name}</strong></span>
-                        <button class="btn btn-danger" onclick="removeCompatibility('${l.id}')" style="padding:4px 12px;">✕</button>
+                        <span>${{typeLabels[l.compatible_type] || l.compatible_type}}: <strong>${{l.compatible_name}}</strong></span>
+                        <button class="btn btn-danger" onclick="removeCompatibility('${{l.id}}')" style="padding:4px 12px;">✕</button>
                     </div>
                 `).join('');
             }}
@@ -1080,7 +1080,7 @@ def admin_components():
 
             async function removeCompatibility(linkId) {{
                 if (!confirm('Удалить связь?')) return;
-                const response = await fetch(`/api/compatibility/${linkId}`, {{ method: 'DELETE' }});
+                const response = await fetch(`/api/compatibility/${{linkId}}`, {{ method: 'DELETE' }});
                 if (response.ok) {{
                     await loadCompatList(currentComponentId);
                     alert('✅ Связь удалена!');
@@ -1097,7 +1097,7 @@ def admin_components():
                 const type = this.value;
                 const select = document.getElementById('compatItemSelect');
                 select.innerHTML = '<option value="">Загрузка...</option>';
-                fetch(`/api/components?type=${type}`)
+                fetch(`/api/components?type=${{type}}`)
                     .then(r => r.json())
                     .then(data => {{
                         select.innerHTML = '<option value="">Выберите комплектующее</option>';
