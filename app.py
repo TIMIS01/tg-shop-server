@@ -45,7 +45,7 @@ app.secret_key = SECRET_KEY
 # Настройки почты (для регистрации и уведомлений)
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")
-BREVO_SMS_SENDER = os.environ.get("BREVO_SMS_SENDER", "PCGGPRO")
+SENDER_NAME = "PCGGPRO"
 
 # Хранилище токенов и кодов
 admin_tokens = set()
@@ -174,6 +174,7 @@ def send_order_notification(order_data):
                 <tr><td style="padding: 8px; font-weight: bold;">Почтовое отделение:</td><td style="padding: 8px;">{order_data.get('postal', '—')}</td></tr>
                 <tr><td style="padding: 8px; font-weight: bold;">Комментарий:</td><td style="padding: 8px;">{order_data.get('comment', '—')}</td></tr>
                 <tr><td style="padding: 8px; font-weight: bold;">Телефон:</td><td style="padding: 8px;">{order_data.get('phone', '—')}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Email:</td><td style="padding: 8px;">{order_data.get('user_email', '—')}</td></tr>
                 <tr><td style="padding: 8px; font-weight: bold;">Дата:</td><td style="padding: 8px;">{order_data.get('timestamp', '—')}</td></tr>
             </table>
             <p style="margin-top: 20px; color: #666;">Свяжитесь с покупателем для уточнения деталей.</p>
@@ -210,62 +211,6 @@ def send_order_notification(order_data):
     except Exception as e:
         logger.error(f"❌ Ошибка отправки уведомления: {e}")
         return False
-
-
-# ========== ФУНКЦИЯ ОТПРАВКИ СМС ==========
-def send_sms(phone, code):
-    """Отправляет СМС с кодом подтверждения через Brevo API."""
-    if not BREVO_API_KEY:
-        logger.error("❌ BREVO_API_KEY не задан!")
-        return False
-
-    # Форматируем номер телефона (убираем все лишние символы)
-    phone_clean = ''.join(filter(str.isdigit, phone))
-    if not phone_clean.startswith('7') and not phone_clean.startswith('8'):
-        phone_clean = '7' + phone_clean
-    if len(phone_clean) == 11 and phone_clean.startswith('8'):
-        phone_clean = '7' + phone_clean[1:]
-    if len(phone_clean) != 11:
-        logger.error(f"❌ Неверный формат номера: {phone}")
-        return False
-
-    try:
-        import requests as http_requests
-        
-        payload = {
-            "sender": BREVO_SMS_SENDER,
-            "recipient": phone_clean,
-            "content": f"Код подтверждения PCGGPRO: {code}. Никому не сообщайте код.",
-            "type": "transactional"
-        }
-
-        headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-            "api-key": BREVO_API_KEY
-        }
-
-        response = http_requests.post(
-            "https://api.brevo.com/v3/transactionalSMS/sms",
-            json=payload,
-            headers=headers,
-            timeout=15
-        )
-
-        if response.status_code in [200, 201]:
-            logger.info(f"✅ СМС отправлено на {phone_clean}")
-            return True
-        else:
-            logger.error(f"❌ Ошибка Brevo SMS: {response.status_code} - {response.text}")
-            return False
-    except Exception as e:
-        logger.error(f"❌ Ошибка отправки СМС: {e}")
-        return False
-
-
-def generate_code():
-    """Генерирует 6-значный код подтверждения."""
-    return str(random.randint(100000, 999999))
 
 
 # ========== API ДЛЯ ТОВАРОВ ==========
@@ -374,160 +319,99 @@ def get_users():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# ========== СМС ПОДТВЕРЖДЕНИЕ ==========
+# ========== АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ==========
 
-@app.route('/api/send-sms', methods=['POST'])
-def send_sms_code():
-    """
-    Отправляет СМС с кодом подтверждения.
-    Ожидает: { "phone": "+79001234567" }
-    """
+@app.route('/api/send-verification', methods=['POST'])
+def send_verification_code():
+    """Отправляет код подтверждения на почту."""
     data = request.json
-    phone = data.get('phone', '').strip()
+    email = data.get('email', '').strip().lower()
 
-    if not phone:
-        return jsonify({"status": "error", "message": "Номер телефона обязателен"}), 400
+    if not email or '@' not in email:
+        return jsonify({"status": "error", "message": "Некорректный email"}), 400
 
-    # Очищаем номер
-    phone_clean = ''.join(filter(str.isdigit, phone))
-    if len(phone_clean) < 10:
-        return jsonify({"status": "error", "message": "Неверный формат номера"}), 400
+    # Проверяем, не зарегистрирован ли уже этот email
+    try:
+        existing_user = supabase.table('users').select('id').eq('email', email).execute()
+        if existing_user.data and len(existing_user.data) > 0:
+            return jsonify({"status": "error", "message": "Пользователь с такой почтой уже зарегистрирован."}), 409
+    except:
+        pass
 
-    # Проверяем, не зарегистрирован ли уже этот номер
-    existing_user = supabase.table('users').select('id').eq('phone', phone_clean).execute()
-    if existing_user.data:
-        return jsonify({"status": "error", "message": "Этот номер уже зарегистрирован"}), 409
+    code = str(random.randint(100000, 999999))
+    verification_codes[email] = {"code": code, "timestamp": time.time(), "attempts": 0}
 
-    # Удаляем старые неиспользованные коды для этого номера
-    supabase.table('sms_verifications').delete().eq('phone', phone_clean).execute()
+    subject = "Подтверждение почты | PCGGPRO"
+    body = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #4a9eff;">🖥️ PCGGPRO</h2>
+        <p>Ваш код подтверждения:</p>
+        <h1 style="letter-spacing: 5px; color: #333; background: #f5f5f5; padding: 15px; border-radius: 10px; text-align: center;">{code}</h1>
+        <p>Введите этот код на странице регистрации для подтверждения вашей почты.</p>
+        <p style="color: #999; font-size: 12px;">Код действителен в течение 10 минут.</p>
+    </div>
+    """
 
-    # Генерируем код
-    code = generate_code()
-    expires_at = datetime.now() + timedelta(minutes=5)
-
-    # Сохраняем в БД
-    supabase.table('sms_verifications').insert({
-        'phone': phone_clean,
-        'code': code,
-        'expires_at': expires_at.isoformat(),
-        'attempts': 0,
-        'verified': False
-    }).execute()
-
-    # Отправляем СМС
-    if send_sms(phone_clean, code):
-        return jsonify({
-            "status": "ok",
-            "message": "Код отправлен",
-            "phone": phone_clean,
-            "expires_in": 300
-        }), 200
+    if send_email(email, subject, body):
+        return jsonify({"status": "ok"})
     else:
-        return jsonify({"status": "error", "message": "Не удалось отправить СМС. Попробуйте позже."}), 500
+        return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
 
 
-@app.route('/api/verify-sms', methods=['POST'])
-def verify_sms_code():
-    """
-    Проверяет введённый код подтверждения.
-    Ожидает: { "phone": "+79001234567", "code": "123456" }
-    """
+@app.route('/api/verify-email', methods=['POST'])
+def verify_email_code():
+    """Проверяет код подтверждения email."""
     data = request.json
-    phone = data.get('phone', '').strip()
+    email = data.get('email', '').strip().lower()
     code = data.get('code', '').strip()
 
-    if not phone or not code:
-        return jsonify({"status": "error", "message": "Телефон и код обязательны"}), 400
+    if email not in verification_codes:
+        return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
 
-    phone_clean = ''.join(filter(str.isdigit, phone))
+    stored = verification_codes[email]
+    if time.time() - stored["timestamp"] > 600:
+        del verification_codes[email]
+        return jsonify({"status": "error", "message": "Код истёк"}), 400
+    if stored["attempts"] >= 3:
+        del verification_codes[email]
+        return jsonify({"status": "error", "message": "Превышено количество попыток"}), 400
 
-    # Ищем запись
-    record = supabase.table('sms_verifications')\
-        .select('*')\
-        .eq('phone', phone_clean)\
-        .eq('verified', False)\
-        .order('created_at', desc=True)\
-        .limit(1)\
-        .execute()
+    stored["attempts"] += 1
 
-    if not record.data:
-        return jsonify({"status": "error", "message": "Код не найден или уже использован"}), 400
-
-    record = record.data[0]
-
-    # Проверяем срок действия
-    expires_at = datetime.fromisoformat(record['expires_at'])
-    if datetime.now() > expires_at:
-        return jsonify({"status": "error", "message": "Код истёк. Запросите новый"}), 400
-
-    # Проверяем количество попыток
-    if record['attempts'] >= 5:
-        # Удаляем запись, чтобы можно было запросить новый код
-        supabase.table('sms_verifications').delete().eq('id', record['id']).execute()
-        return jsonify({"status": "error", "message": "Превышено количество попыток. Запросите новый код"}), 400
-
-    # Увеличиваем счётчик попыток
-    supabase.table('sms_verifications')\
-        .update({'attempts': record['attempts'] + 1})\
-        .eq('id', record['id'])\
-        .execute()
-
-    # Проверяем код
-    if record['code'] == code:
-        # Помечаем как подтверждённый
-        supabase.table('sms_verifications')\
-            .update({'verified': True})\
-            .eq('id', record['id'])\
-            .execute()
-        return jsonify({"status": "ok", "message": "Код подтверждён"}), 200
+    if stored["code"] == code:
+        del verification_codes[email]
+        return jsonify({"status": "ok", "message": "Почта подтверждена"})
     else:
         return jsonify({"status": "error", "message": "Неверный код"}), 400
 
 
-# ========== АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ==========
-
 @app.route('/api/register', methods=['POST'])
 def register_user():
+    """Регистрирует нового пользователя."""
     data = request.json
     try:
-        phone = data.get('phone', '').strip()
-
-        # Проверяем, подтверждён ли телефон
-        record = supabase.table('sms_verifications')\
-            .select('*')\
-            .eq('phone', phone)\
-            .eq('verified', True)\
-            .order('created_at', desc=True)\
-            .limit(1)\
-            .execute()
-
-        if not record.data:
-            return jsonify({"status": "error", "message": "Телефон не подтверждён"}), 400
-
-        # Проверяем, нет ли пользователя с таким телефоном
-        existing = supabase.table('users').select('id').eq('phone', phone).execute()
+        # Проверяем email
+        existing = supabase.table('users').select('id').eq('email', data['email']).execute()
         if existing.data:
-            return jsonify({"status": "error", "message": "Пользователь с таким номером уже зарегистрирован"}), 400
+            return jsonify({"status": "error", "message": "Пользователь с таким email уже зарегистрирован"}), 400
 
-        # Проверяем email (если указан)
-        if data.get('email'):
-            existing_email = supabase.table('users').select('id').eq('email', data['email']).execute()
-            if existing_email.data:
-                return jsonify({"status": "error", "message": "Пользователь с таким email уже зарегистрирован"}), 400
+        # Проверяем телефон (если указан)
+        if data.get('phone'):
+            existing_phone = supabase.table('users').select('id').eq('phone', data['phone']).execute()
+            if existing_phone.data:
+                return jsonify({"status": "error", "message": "Пользователь с таким номером телефона уже зарегистрирован"}), 400
 
         password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
 
         response = supabase.table('users').insert({
             'full_name': data.get('full_name', ''),
-            'phone': phone,
-            'email': data.get('email', ''),
+            'email': data['email'].lower(),
+            'phone': data.get('phone', ''),
             'city': data.get('city', ''),
             'password_hash': password_hash,
+            'email_verified': data.get('email_verified', False),
             'created_at': datetime.now().isoformat()
         }).execute()
-
-        # Удаляем использованную верификацию
-        supabase.table('sms_verifications').delete().eq('phone', phone).execute()
 
         return jsonify({"status": "ok", "user": response.data[0]})
     except Exception as e:
@@ -537,18 +421,18 @@ def register_user():
 
 @app.route('/api/login', methods=['POST'])
 def login_user():
+    """Авторизует пользователя по email и паролю."""
     data = request.json
     try:
-        # Ищем пользователя по телефону
-        response = supabase.table('users').select('*').eq('phone', data['phone']).execute()
+        response = supabase.table('users').select('*').eq('email', data['email'].lower()).execute()
         if not response.data:
-            return jsonify({"status": "error", "message": "Неверный телефон или пароль"}), 401
+            return jsonify({"status": "error", "message": "Неверный email или пароль"}), 401
 
         user = response.data[0]
         password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
 
         if user['password_hash'] != password_hash:
-            return jsonify({"status": "error", "message": "Неверный телефон или пароль"}), 401
+            return jsonify({"status": "error", "message": "Неверный email или пароль"}), 401
 
         token = hashlib.sha256(f"{SECRET_KEY}{user['id']}{time.time()}".encode()).hexdigest()
 
@@ -558,13 +442,90 @@ def login_user():
             "user": {
                 "id": user['id'],
                 "full_name": user['full_name'],
+                "email": user['email'],
                 "phone": user.get('phone', ''),
-                "email": user.get('email', ''),
                 "city": user.get('city', '')
             }
         })
     except Exception as e:
         logger.error(f"Ошибка входа: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ========== ВОССТАНОВЛЕНИЕ ПАРОЛЯ ==========
+reset_tokens = {}
+
+@app.route('/api/forgot-password', methods=['POST'])
+def forgot_password():
+    data = request.json
+    email = data.get('email', '').strip().lower()
+    if not email or '@' not in email:
+        return jsonify({"status": "error", "message": "Некорректный email"}), 400
+    try:
+        if not supabase.table('users').select('id').eq('email', email).execute().data:
+            return jsonify({"status": "ok", "message": "Если такой email зарегистрирован, код отправлен"}), 200
+    except:
+        return jsonify({"status": "error", "message": "Ошибка сервера"}), 500
+
+    code = str(random.randint(100000, 999999))
+    reset_token = hashlib.sha256(f"{SECRET_KEY}{email}{time.time()}".encode()).hexdigest()
+    reset_tokens[email] = {"code": code, "token": reset_token, "timestamp": time.time(), "attempts": 0}
+
+    subject = "Восстановление пароля | PCGGPRO"
+    body = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #4a9eff;">🖥️ PCGGPRO</h2>
+        <p>Ваш код для восстановления пароля:</p>
+        <h1 style="letter-spacing: 5px; color: #333; background: #f5f5f5; padding: 15px; border-radius: 10px; text-align: center;">{code}</h1>
+        <p>Введите этот код на странице восстановления пароля.</p>
+        <p style="color: #999; font-size: 12px;">Код действителен в течение 10 минут.</p>
+    </div>
+    """
+
+    if send_email(email, subject, body):
+        return jsonify({"status": "ok", "reset_token": reset_token})
+    else:
+        return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
+
+
+@app.route('/api/verify-reset-code', methods=['POST'])
+def verify_reset_code():
+    data = request.json
+    email, code, token = data.get('email', '').strip().lower(), data.get('code', '').strip(), data.get('reset_token', '').strip()
+    if email not in reset_tokens:
+        return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
+    stored = reset_tokens[email]
+    if stored["token"] != token:
+        return jsonify({"status": "error", "message": "Неверный токен"}), 400
+    if time.time() - stored["timestamp"] > 600:
+        del reset_tokens[email]
+        return jsonify({"status": "error", "message": "Код истёк"}), 400
+    if stored["attempts"] >= 3:
+        del reset_tokens[email]
+        return jsonify({"status": "error", "message": "Превышено количество попыток"}), 400
+    stored["attempts"] += 1
+    if stored["code"] == code:
+        return jsonify({"status": "ok", "message": "Код подтверждён"})
+    else:
+        return jsonify({"status": "error", "message": "Неверный код"}), 400
+
+
+@app.route('/api/reset-password', methods=['POST'])
+def reset_password():
+    data = request.json
+    email, password, token = data.get('email', '').strip().lower(), data.get('password', ''), data.get('reset_token', '')
+    if email not in reset_tokens:
+        return jsonify({"status": "error", "message": "Токен не найден или истёк"}), 400
+    if reset_tokens[email]["token"] != token:
+        return jsonify({"status": "error", "message": "Неверный токен"}), 400
+    if len(password) < 6:
+        return jsonify({"status": "error", "message": "Пароль должен быть не менее 6 символов"}), 400
+    try:
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        supabase.table('users').update({'password_hash': password_hash}).eq('email', email).execute()
+        del reset_tokens[email]
+        return jsonify({"status": "ok", "message": "Пароль изменён"})
+    except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -605,6 +566,7 @@ def webhook():
                 "postal": data.get('postal', '—'),
                 "comment": data.get('comment', '—'),
                 "phone": data.get('phone', '—'),
+                "user_email": data.get('user_email', '—'),
                 "timestamp": datetime.now().strftime("%d.%m.%Y %H:%M")
             }
             send_order_notification(order_notification_data)
@@ -616,6 +578,7 @@ def webhook():
     except Exception as e:
         logger.error(f"Ошибка обработки данных Mini App: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 # ========== АДМИН-ПАНЕЛЬ: СТРАНИЦЫ ==========
 @app.route('/admin')
@@ -1343,77 +1306,6 @@ def admin_users():
     </html>
     '''
 
-# ========== ВОССТАНОВЛЕНИЕ ПАРОЛЯ ==========
-reset_tokens = {}
-
-@app.route('/api/forgot-password', methods=['POST'])
-def forgot_password():
-    data = request.json
-    phone = data.get('phone', '').strip()
-    if not phone:
-        return jsonify({"status": "error", "message": "Номер телефона обязателен"}), 400
-    
-    phone_clean = ''.join(filter(str.isdigit, phone))
-    
-    try:
-        user = supabase.table('users').select('id').eq('phone', phone_clean).execute()
-        if not user.data:
-            return jsonify({"status": "ok", "message": "Если такой номер зарегистрирован, код отправлен"}), 200
-    except:
-        return jsonify({"status": "error", "message": "Ошибка сервера"}), 500
-
-    code = str(random.randint(100000, 999999))
-    reset_token = hashlib.sha256(f"{SECRET_KEY}{phone_clean}{time.time()}".encode()).hexdigest()
-    reset_tokens[phone_clean] = {"code": code, "token": reset_token, "timestamp": time.time(), "attempts": 0}
-
-    if send_sms(phone_clean, code):
-        return jsonify({"status": "ok", "reset_token": reset_token})
-    else:
-        return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
-
-@app.route('/api/verify-reset-code', methods=['POST'])
-def verify_reset_code():
-    data = request.json
-    phone, code, token = data.get('phone', '').strip(), data.get('code', '').strip(), data.get('reset_token', '').strip()
-    phone_clean = ''.join(filter(str.isdigit, phone))
-    
-    if phone_clean not in reset_tokens:
-        return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
-    stored = reset_tokens[phone_clean]
-    if stored["token"] != token:
-        return jsonify({"status": "error", "message": "Неверный токен"}), 400
-    if time.time() - stored["timestamp"] > 600:
-        del reset_tokens[phone_clean]
-        return jsonify({"status": "error", "message": "Код истёк"}), 400
-    if stored["attempts"] >= 3:
-        del reset_tokens[phone_clean]
-        return jsonify({"status": "error", "message": "Превышено количество попыток"}), 400
-    stored["attempts"] += 1
-    if stored["code"] == code:
-        return jsonify({"status": "ok", "message": "Код подтверждён"})
-    else:
-        return jsonify({"status": "error", "message": "Неверный код"}), 400
-
-@app.route('/api/reset-password', methods=['POST'])
-def reset_password():
-    data = request.json
-    phone, password, token = data.get('phone', '').strip(), data.get('password', ''), data.get('reset_token', '')
-    phone_clean = ''.join(filter(str.isdigit, phone))
-    
-    if phone_clean not in reset_tokens:
-        return jsonify({"status": "error", "message": "Токен не найден или истёк"}), 400
-    if reset_tokens[phone_clean]["token"] != token:
-        return jsonify({"status": "error", "message": "Неверный токен"}), 400
-    if len(password) < 6:
-        return jsonify({"status": "error", "message": "Пароль должен быть не менее 6 символов"}), 400
-    try:
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        supabase.table('users').update({'password_hash': password_hash}).eq('phone', phone_clean).execute()
-        del reset_tokens[phone_clean]
-        return jsonify({"status": "ok", "message": "Пароль изменён"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
 # ========== ПОДДЕРЖКА ==========
 @app.route('/api/support', methods=['POST'])
 def support_message():
@@ -1435,6 +1327,7 @@ def support_message():
             "postal": data.get('message', ''),
             "comment": "",
             "phone": data.get('phone', ''),
+            "user_email": data.get('email', ''),
             "timestamp": datetime.now().strftime("%d.%m.%Y %H:%M")
         })
         return jsonify({"status": "ok"}), 200
