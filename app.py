@@ -45,6 +45,7 @@ app.secret_key = SECRET_KEY
 # Настройки почты (для регистрации и уведомлений)
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "pcggpronotif@gmail.com")
+BREVO_SMS_SENDER = os.environ.get("BREVO_SMS_SENDER", "PCGGPRO")
 
 # Хранилище токенов и кодов
 admin_tokens = set()
@@ -172,6 +173,7 @@ def send_order_notification(order_data):
                 <tr><td style="padding: 8px; font-weight: bold;">Город:</td><td style="padding: 8px;">{order_data.get('city', '—')}</td></tr>
                 <tr><td style="padding: 8px; font-weight: bold;">Почтовое отделение:</td><td style="padding: 8px;">{order_data.get('postal', '—')}</td></tr>
                 <tr><td style="padding: 8px; font-weight: bold;">Комментарий:</td><td style="padding: 8px;">{order_data.get('comment', '—')}</td></tr>
+                <tr><td style="padding: 8px; font-weight: bold;">Телефон:</td><td style="padding: 8px;">{order_data.get('phone', '—')}</td></tr>
                 <tr><td style="padding: 8px; font-weight: bold;">Дата:</td><td style="padding: 8px;">{order_data.get('timestamp', '—')}</td></tr>
             </table>
             <p style="margin-top: 20px; color: #666;">Свяжитесь с покупателем для уточнения деталей.</p>
@@ -208,6 +210,62 @@ def send_order_notification(order_data):
     except Exception as e:
         logger.error(f"❌ Ошибка отправки уведомления: {e}")
         return False
+
+
+# ========== ФУНКЦИЯ ОТПРАВКИ СМС ==========
+def send_sms(phone, code):
+    """Отправляет СМС с кодом подтверждения через Brevo API."""
+    if not BREVO_API_KEY:
+        logger.error("❌ BREVO_API_KEY не задан!")
+        return False
+
+    # Форматируем номер телефона (убираем все лишние символы)
+    phone_clean = ''.join(filter(str.isdigit, phone))
+    if not phone_clean.startswith('7') and not phone_clean.startswith('8'):
+        phone_clean = '7' + phone_clean
+    if len(phone_clean) == 11 and phone_clean.startswith('8'):
+        phone_clean = '7' + phone_clean[1:]
+    if len(phone_clean) != 11:
+        logger.error(f"❌ Неверный формат номера: {phone}")
+        return False
+
+    try:
+        import requests as http_requests
+        
+        payload = {
+            "sender": BREVO_SMS_SENDER,
+            "recipient": phone_clean,
+            "content": f"Код подтверждения PCGGPRO: {code}. Никому не сообщайте код.",
+            "type": "transactional"
+        }
+
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "api-key": BREVO_API_KEY
+        }
+
+        response = http_requests.post(
+            "https://api.brevo.com/v3/transactionalSMS/sms",
+            json=payload,
+            headers=headers,
+            timeout=15
+        )
+
+        if response.status_code in [200, 201]:
+            logger.info(f"✅ СМС отправлено на {phone_clean}")
+            return True
+        else:
+            logger.error(f"❌ Ошибка Brevo SMS: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки СМС: {e}")
+        return False
+
+
+def generate_code():
+    """Генерирует 6-значный код подтверждения."""
+    return str(random.randint(100000, 999999))
 
 
 # ========== API ДЛЯ ТОВАРОВ ==========
@@ -315,103 +373,182 @@ def get_users():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ========== АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ==========
-@app.route('/api/send-verification', methods=['POST'])
-def send_verification_code():
-    data = request.json
-    email = data.get('email', '').strip().lower()
 
-    if not email or '@' not in email:
-        return jsonify({"status": "error", "message": "Некорректный email"}), 400
+# ========== СМС ПОДТВЕРЖДЕНИЕ ==========
 
-    try:
-        existing_user = supabase.table('users').select('id').eq('email', email).execute()
-        if existing_user.data and len(existing_user.data) > 0:
-            return jsonify({"status": "error", "message": "Пользователь с такой почтой уже зарегистрирован."}), 409
-    except:
-        pass
-
-    code = str(random.randint(100000, 999999))
-    verification_codes[email] = {"code": code, "timestamp": time.time(), "attempts": 0}
-
-    subject = "Подтверждение почты | PCGGPRO"
-    body = f"""
-    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-        <h2 style="color: #4a9eff;">🖥️ PCGGPRO</h2>
-        <p>Ваш код подтверждения:</p>
-        <h1 style="letter-spacing: 5px; color: #333;">{code}</h1>
-        <p>Введите этот код на странице регистрации.</p>
-    </div>
+@app.route('/api/send-sms', methods=['POST'])
+def send_sms_code():
     """
-
-    if send_email(email, subject, body):
-        return jsonify({"status": "ok", "code": code})
-    else:
-        return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
-
-@app.route('/api/verify-email', methods=['POST'])
-def verify_email_code():
+    Отправляет СМС с кодом подтверждения.
+    Ожидает: { "phone": "+79001234567" }
+    """
     data = request.json
-    email = data.get('email', '').strip().lower()
+    phone = data.get('phone', '').strip()
+
+    if not phone:
+        return jsonify({"status": "error", "message": "Номер телефона обязателен"}), 400
+
+    # Очищаем номер
+    phone_clean = ''.join(filter(str.isdigit, phone))
+    if len(phone_clean) < 10:
+        return jsonify({"status": "error", "message": "Неверный формат номера"}), 400
+
+    # Проверяем, не зарегистрирован ли уже этот номер
+    existing_user = supabase.table('users').select('id').eq('phone', phone_clean).execute()
+    if existing_user.data:
+        return jsonify({"status": "error", "message": "Этот номер уже зарегистрирован"}), 409
+
+    # Удаляем старые неиспользованные коды для этого номера
+    supabase.table('sms_verifications').delete().eq('phone', phone_clean).execute()
+
+    # Генерируем код
+    code = generate_code()
+    expires_at = datetime.now() + timedelta(minutes=5)
+
+    # Сохраняем в БД
+    supabase.table('sms_verifications').insert({
+        'phone': phone_clean,
+        'code': code,
+        'expires_at': expires_at.isoformat(),
+        'attempts': 0,
+        'verified': False
+    }).execute()
+
+    # Отправляем СМС
+    if send_sms(phone_clean, code):
+        return jsonify({
+            "status": "ok",
+            "message": "Код отправлен",
+            "phone": phone_clean,
+            "expires_in": 300
+        }), 200
+    else:
+        return jsonify({"status": "error", "message": "Не удалось отправить СМС. Попробуйте позже."}), 500
+
+
+@app.route('/api/verify-sms', methods=['POST'])
+def verify_sms_code():
+    """
+    Проверяет введённый код подтверждения.
+    Ожидает: { "phone": "+79001234567", "code": "123456" }
+    """
+    data = request.json
+    phone = data.get('phone', '').strip()
     code = data.get('code', '').strip()
 
-    if email not in verification_codes:
-        return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
+    if not phone or not code:
+        return jsonify({"status": "error", "message": "Телефон и код обязательны"}), 400
 
-    stored = verification_codes[email]
-    if time.time() - stored["timestamp"] > 600:
-        del verification_codes[email]
-        return jsonify({"status": "error", "message": "Код истёк"}), 400
-    if stored["attempts"] >= 3:
-        del verification_codes[email]
-        return jsonify({"status": "error", "message": "Превышено количество попыток"}), 400
+    phone_clean = ''.join(filter(str.isdigit, phone))
 
-    stored["attempts"] += 1
+    # Ищем запись
+    record = supabase.table('sms_verifications')\
+        .select('*')\
+        .eq('phone', phone_clean)\
+        .eq('verified', False)\
+        .order('created_at', desc=True)\
+        .limit(1)\
+        .execute()
 
-    if stored["code"] == code:
-        del verification_codes[email]
-        return jsonify({"status": "ok", "message": "Почта подтверждена"})
+    if not record.data:
+        return jsonify({"status": "error", "message": "Код не найден или уже использован"}), 400
+
+    record = record.data[0]
+
+    # Проверяем срок действия
+    expires_at = datetime.fromisoformat(record['expires_at'])
+    if datetime.now() > expires_at:
+        return jsonify({"status": "error", "message": "Код истёк. Запросите новый"}), 400
+
+    # Проверяем количество попыток
+    if record['attempts'] >= 5:
+        # Удаляем запись, чтобы можно было запросить новый код
+        supabase.table('sms_verifications').delete().eq('id', record['id']).execute()
+        return jsonify({"status": "error", "message": "Превышено количество попыток. Запросите новый код"}), 400
+
+    # Увеличиваем счётчик попыток
+    supabase.table('sms_verifications')\
+        .update({'attempts': record['attempts'] + 1})\
+        .eq('id', record['id'])\
+        .execute()
+
+    # Проверяем код
+    if record['code'] == code:
+        # Помечаем как подтверждённый
+        supabase.table('sms_verifications')\
+            .update({'verified': True})\
+            .eq('id', record['id'])\
+            .execute()
+        return jsonify({"status": "ok", "message": "Код подтверждён"}), 200
     else:
         return jsonify({"status": "error", "message": "Неверный код"}), 400
+
+
+# ========== АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ==========
 
 @app.route('/api/register', methods=['POST'])
 def register_user():
     data = request.json
     try:
-        existing = supabase.table('users').select('id').eq('email', data['email']).execute()
+        phone = data.get('phone', '').strip()
+
+        # Проверяем, подтверждён ли телефон
+        record = supabase.table('sms_verifications')\
+            .select('*')\
+            .eq('phone', phone)\
+            .eq('verified', True)\
+            .order('created_at', desc=True)\
+            .limit(1)\
+            .execute()
+
+        if not record.data:
+            return jsonify({"status": "error", "message": "Телефон не подтверждён"}), 400
+
+        # Проверяем, нет ли пользователя с таким телефоном
+        existing = supabase.table('users').select('id').eq('phone', phone).execute()
         if existing.data:
-            return jsonify({"status": "error", "message": "Пользователь с таким email уже существует"}), 400
+            return jsonify({"status": "error", "message": "Пользователь с таким номером уже зарегистрирован"}), 400
+
+        # Проверяем email (если указан)
+        if data.get('email'):
+            existing_email = supabase.table('users').select('id').eq('email', data['email']).execute()
+            if existing_email.data:
+                return jsonify({"status": "error", "message": "Пользователь с таким email уже зарегистрирован"}), 400
 
         password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
 
         response = supabase.table('users').insert({
             'full_name': data.get('full_name', ''),
-            'email': data['email'].lower(),
-            'telegram': data.get('telegram', ''),
+            'phone': phone,
+            'email': data.get('email', ''),
             'city': data.get('city', ''),
             'password_hash': password_hash,
-            'email_verified': data.get('email_verified', False),
             'created_at': datetime.now().isoformat()
         }).execute()
+
+        # Удаляем использованную верификацию
+        supabase.table('sms_verifications').delete().eq('phone', phone).execute()
 
         return jsonify({"status": "ok", "user": response.data[0]})
     except Exception as e:
         logger.error(f"Ошибка регистрации: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
 @app.route('/api/login', methods=['POST'])
 def login_user():
     data = request.json
     try:
-        response = supabase.table('users').select('*').eq('email', data['email'].lower()).execute()
+        # Ищем пользователя по телефону
+        response = supabase.table('users').select('*').eq('phone', data['phone']).execute()
         if not response.data:
-            return jsonify({"status": "error", "message": "Неверный email или пароль"}), 401
+            return jsonify({"status": "error", "message": "Неверный телефон или пароль"}), 401
 
         user = response.data[0]
         password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
 
         if user['password_hash'] != password_hash:
-            return jsonify({"status": "error", "message": "Неверный email или пароль"}), 401
+            return jsonify({"status": "error", "message": "Неверный телефон или пароль"}), 401
 
         token = hashlib.sha256(f"{SECRET_KEY}{user['id']}{time.time()}".encode()).hexdigest()
 
@@ -421,14 +558,15 @@ def login_user():
             "user": {
                 "id": user['id'],
                 "full_name": user['full_name'],
-                "email": user['email'],
-                "telegram": user.get('telegram', ''),
+                "phone": user.get('phone', ''),
+                "email": user.get('email', ''),
                 "city": user.get('city', '')
             }
         })
     except Exception as e:
         logger.error(f"Ошибка входа: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 # ========== ВЕБХУК ДЛЯ БОТА И САЙТА ==========
 @app.route('/api/webhook', methods=['POST'])
@@ -446,6 +584,7 @@ def webhook():
                 'username': data.get('username', data.get('full_name', 'Пользователь')),
                 'full_name': data.get('full_name', data.get('username', 'Пользователь')),
                 'user_email': data.get('user_email', ''),
+                'phone': data.get('phone', ''),
                 'telegram': data.get('telegram', ''),
                 'product_name': data.get('productName'),
                 'quantity': data.get('quantity', 1),
@@ -465,6 +604,7 @@ def webhook():
                 "city": data.get('city', '—'),
                 "postal": data.get('postal', '—'),
                 "comment": data.get('comment', '—'),
+                "phone": data.get('phone', '—'),
                 "timestamp": datetime.now().strftime("%d.%m.%Y %H:%M")
             }
             send_order_notification(order_notification_data)
@@ -1138,7 +1278,7 @@ def admin_orders():
             <a href="/admin/support">💬 Поддержка</a><a href="/admin/chats">💬 Чаты</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
-        <div class="content"><h1>🛒 Заказы</h1><div class="card"><table id="ordersTable"><thead><tr><th>ID</th><th>Клиент</th><th>Email</th><th>Товар</th><th>Сумма</th><th>Город</th><th>Статус</th><th>Дата</th><th>Действия</th></tr></thead><tbody></tbody></table></div></div>
+        <div class="content"><h1>🛒 Заказы</h1><div class="card"><table id="ordersTable"><thead><tr><th>ID</th><th>Клиент</th><th>Email</th><th>Телефон</th><th>Товар</th><th>Сумма</th><th>Город</th><th>Статус</th><th>Дата</th><th>Действия</th></tr></thead><tbody></tbody></table></div></div>
         <div class="modal" id="orderModal"><div class="modal-content"><h2>Детали заказа</h2><div id="orderDetails"></div><div style="margin-top: 20px;"><label>Изменить статус</label><select id="orderStatus" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;"><option value="оформлен">Оформлен</option><option value="принят">Принят</option><option value="в сборке">В сборке</option><option value="отправлен">Отправлен</option><option value="доставлен">Доставлен</option><option value="отменён">Отменён</option></select><label style="margin-top:15px;">Трек-номер</label><input type="text" id="trackingNumber" placeholder="Введите трек-номер"><div style="margin-top:15px;display:flex;gap:10px;"><button class="btn btn-primary" onclick="saveOrderStatus()">Сохранить</button><button class="btn btn-danger" onclick="closeModal()">Закрыть</button></div></div></div></div>
         <script>
             let currentOrderId = null;
@@ -1146,7 +1286,7 @@ def admin_orders():
                 const response = await fetch('/api/orders'); const data = await response.json();
                 const tbody = document.querySelector('#ordersTable tbody');
                 const badges = {{'оформлен':'badge-info','принят':'badge-warning','в сборке':'badge-warning','отправлен':'badge-primary','доставлен':'badge-success','отменён':'badge-danger'}};
-                tbody.innerHTML = (data.orders || []).map(o => {{ const d = new Date(o.created_at||o.order_date); return `<tr><td>#${{o.id}}</td><td><strong>${{o.full_name||o.username||'—'}}</strong></td><td>${{o.user_email||'—'}}</td><td>${{o.product_name||'—'}}</td><td>${{(o.total_price||0).toLocaleString()}} ₽</td><td>${{o.city||'—'}}</td><td><span class="badge ${{badges[o.status]||'badge-info'}}">${{o.status||'оформлен'}}</span></td><td>${{d.toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="viewOrder(${{o.id}})">👁️</button></td></tr>`; }}).join('');
+                tbody.innerHTML = (data.orders || []).map(o => {{ const d = new Date(o.created_at||o.order_date); return `<tr><td>#${{o.id}}</td><td><strong>${{o.full_name||o.username||'—'}}</strong></td><td>${{o.user_email||'—'}}</td><td>${{o.phone||'—'}}</td><td>${{o.product_name||'—'}}</td><td>${{(o.total_price||0).toLocaleString()}} ₽</td><td>${{o.city||'—'}}</td><td><span class="badge ${{badges[o.status]||'badge-info'}}">${{o.status||'оформлен'}}</span></td><td>${{d.toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="viewOrder(${{o.id}})">👁️</button></td></tr>`; }}).join('');
             }}
             async function viewOrder(id) {{
                 currentOrderId = id;
@@ -1155,7 +1295,7 @@ def admin_orders():
                 if(order) {{
                     document.getElementById('orderStatus').value = order.status||'оформлен';
                     document.getElementById('trackingNumber').value = order.tracking_number||'';
-                    document.getElementById('orderDetails').innerHTML = `<div class="detail-grid"><div class="detail-item"><strong>Клиент</strong><span>${{order.full_name||order.username||'—'}}</span></div><div class="detail-item"><strong>Email</strong><span>${{order.user_email||'—'}}</span></div><div class="detail-item"><strong>Telegram</strong><span>${{order.telegram||'—'}}</span></div><div class="detail-item"><strong>Товар</strong><span>${{order.product_name||'—'}}</span></div><div class="detail-item"><strong>Цена</strong><span>${{(order.total_price||0).toLocaleString()}} ₽</span></div><div class="detail-item"><strong>Город</strong><span>${{order.city||'—'}}</span></div><div class="detail-item"><strong>Статус</strong><span>${{order.status||'оформлен'}}</span></div><div class="detail-item"><strong>Трек-номер</strong><span>${{order.tracking_number||'—'}}</span></div><div class="detail-item"><strong>Дата</strong><span>${{new Date(order.created_at||order.order_date).toLocaleString('ru-RU')}}</span></div></div>`;
+                    document.getElementById('orderDetails').innerHTML = `<div class="detail-grid"><div class="detail-item"><strong>Клиент</strong><span>${{order.full_name||order.username||'—'}}</span></div><div class="detail-item"><strong>Email</strong><span>${{order.user_email||'—'}}</span></div><div class="detail-item"><strong>Телефон</strong><span>${{order.phone||'—'}}</span></div><div class="detail-item"><strong>Telegram</strong><span>${{order.telegram||'—'}}</span></div><div class="detail-item"><strong>Товар</strong><span>${{order.product_name||'—'}}</span></div><div class="detail-item"><strong>Цена</strong><span>${{(order.total_price||0).toLocaleString()}} ₽</span></div><div class="detail-item"><strong>Город</strong><span>${{order.city||'—'}}</span></div><div class="detail-item"><strong>Статус</strong><span>${{order.status||'оформлен'}}</span></div><div class="detail-item"><strong>Трек-номер</strong><span>${{order.tracking_number||'—'}}</span></div><div class="detail-item"><strong>Дата</strong><span>${{new Date(order.created_at||order.order_date).toLocaleString('ru-RU')}}</span></div></div>`;
                     document.getElementById('orderModal').style.display = 'flex';
                 }}
             }}
@@ -1187,14 +1327,14 @@ def admin_users():
             <a href="/admin/orders">🛒 Заказы</a><a href="/admin/users" class="active">👥 Пользователи</a>
             <a href="#" onclick="logout()">🚪 Выйти</a>
         </div>
-        <div class="content"><h1>👥 Пользователи</h1><div class="card"><table id="usersTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Город</th><th>Заказов</th><th>Дата регистрации</th></tr></thead><tbody></tbody></table></div></div>
+        <div class="content"><h1>👥 Пользователи</h1><div class="card"><table id="usersTable"><thead><tr><th>ID</th><th>Имя</th><th>Телефон</th><th>Email</th><th>Город</th><th>Заказов</th><th>Дата регистрации</th></tr></thead><tbody></tbody></table></div></div>
         <script>
             async function loadUsers() {{
                 const response = await fetch('/api/users'); const data = await response.json();
                 const ordersRes = await fetch('/api/orders'); const ordersData = await ordersRes.json();
                 const orders = ordersData.orders || [];
                 const tbody = document.querySelector('#usersTable tbody');
-                tbody.innerHTML = (data.users || []).map(u => {{ const d = new Date(u.created_at); return `<tr><td>${{u.id}}</td><td><strong>${{u.full_name||'—'}}</strong></td><td>${{u.email||'—'}}</td><td>${{u.city||'—'}}</td><td><span class="badge badge-info">${{orders.filter(o=>o.user_email==u.email).length}}</span></td><td>${{d.toLocaleString('ru-RU')}}</td></tr>`; }}).join('');
+                tbody.innerHTML = (data.users || []).map(u => {{ const d = new Date(u.created_at); return `<tr><td>${{u.id}}</td><td><strong>${{u.full_name||'—'}}</strong></td><td>${{u.phone||'—'}}</td><td>${{u.email||'—'}}</td><td>${{u.city||'—'}}</td><td><span class="badge badge-info">${{orders.filter(o=>o.user_email==u.email || o.phone==u.phone).length}}</span></td><td>${{d.toLocaleString('ru-RU')}}</td></tr>`; }}).join('');
             }}
             function logout() {{ localStorage.removeItem('admin_token'); window.location.href='/admin'; }}
             loadUsers();
@@ -1209,73 +1349,115 @@ reset_tokens = {}
 @app.route('/api/forgot-password', methods=['POST'])
 def forgot_password():
     data = request.json
-    email = data.get('email', '').strip().lower()
-    if not email or '@' not in email: return jsonify({"status":"error","message":"Некорректный email"}), 400
+    phone = data.get('phone', '').strip()
+    if not phone:
+        return jsonify({"status": "error", "message": "Номер телефона обязателен"}), 400
+    
+    phone_clean = ''.join(filter(str.isdigit, phone))
+    
     try:
-        if not supabase.table('users').select('id').eq('email', email).execute().data:
-            return jsonify({"status":"ok","message":"Если такой email зарегистрирован, код отправлен"}), 200
-    except: return jsonify({"status":"error","message":"Ошибка сервера"}), 500
+        user = supabase.table('users').select('id').eq('phone', phone_clean).execute()
+        if not user.data:
+            return jsonify({"status": "ok", "message": "Если такой номер зарегистрирован, код отправлен"}), 200
+    except:
+        return jsonify({"status": "error", "message": "Ошибка сервера"}), 500
 
     code = str(random.randint(100000, 999999))
-    reset_token = hashlib.sha256(f"{SECRET_KEY}{email}{time.time()}".encode()).hexdigest()
-    reset_tokens[email] = {"code":code,"token":reset_token,"timestamp":time.time(),"attempts":0}
+    reset_token = hashlib.sha256(f"{SECRET_KEY}{phone_clean}{time.time()}".encode()).hexdigest()
+    reset_tokens[phone_clean] = {"code": code, "token": reset_token, "timestamp": time.time(), "attempts": 0}
 
-    if send_email(email, "Восстановление пароля | PCGGPRO", f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;"><h2 style="color:#4a9eff;">🖥️ PCGGPRO</h2><p>Ваш код для восстановления пароля:</p><h1 style="letter-spacing:5px;color:#333;">{code}</h1></div>"""):
-        return jsonify({"status":"ok","reset_token":reset_token})
+    if send_sms(phone_clean, code):
+        return jsonify({"status": "ok", "reset_token": reset_token})
     else:
-        return jsonify({"status":"error","message":"Не удалось отправить код"}), 500
+        return jsonify({"status": "error", "message": "Не удалось отправить код"}), 500
 
 @app.route('/api/verify-reset-code', methods=['POST'])
 def verify_reset_code():
     data = request.json
-    email, code, token = data.get('email','').strip().lower(), data.get('code','').strip(), data.get('reset_token','').strip()
-    if email not in reset_tokens: return jsonify({"status":"error","message":"Код не найден или истёк"}), 400
-    stored = reset_tokens[email]
-    if stored["token"] != token: return jsonify({"status":"error","message":"Неверный токен"}), 400
-    if time.time() - stored["timestamp"] > 600: del reset_tokens[email]; return jsonify({"status":"error","message":"Код истёк"}), 400
-    if stored["attempts"] >= 3: del reset_tokens[email]; return jsonify({"status":"error","message":"Превышено количество попыток"}), 400
+    phone, code, token = data.get('phone', '').strip(), data.get('code', '').strip(), data.get('reset_token', '').strip()
+    phone_clean = ''.join(filter(str.isdigit, phone))
+    
+    if phone_clean not in reset_tokens:
+        return jsonify({"status": "error", "message": "Код не найден или истёк"}), 400
+    stored = reset_tokens[phone_clean]
+    if stored["token"] != token:
+        return jsonify({"status": "error", "message": "Неверный токен"}), 400
+    if time.time() - stored["timestamp"] > 600:
+        del reset_tokens[phone_clean]
+        return jsonify({"status": "error", "message": "Код истёк"}), 400
+    if stored["attempts"] >= 3:
+        del reset_tokens[phone_clean]
+        return jsonify({"status": "error", "message": "Превышено количество попыток"}), 400
     stored["attempts"] += 1
-    if stored["code"] == code: return jsonify({"status":"ok","message":"Код подтверждён"})
-    else: return jsonify({"status":"error","message":"Неверный код"}), 400
+    if stored["code"] == code:
+        return jsonify({"status": "ok", "message": "Код подтверждён"})
+    else:
+        return jsonify({"status": "error", "message": "Неверный код"}), 400
 
 @app.route('/api/reset-password', methods=['POST'])
 def reset_password():
     data = request.json
-    email, password, token = data.get('email','').strip().lower(), data.get('password',''), data.get('reset_token','')
-    if email not in reset_tokens: return jsonify({"status":"error","message":"Токен не найден или истёк"}), 400
-    if reset_tokens[email]["token"] != token: return jsonify({"status":"error","message":"Неверный токен"}), 400
-    if len(password) < 6: return jsonify({"status":"error","message":"Пароль должен быть не менее 6 символов"}), 400
+    phone, password, token = data.get('phone', '').strip(), data.get('password', ''), data.get('reset_token', '')
+    phone_clean = ''.join(filter(str.isdigit, phone))
+    
+    if phone_clean not in reset_tokens:
+        return jsonify({"status": "error", "message": "Токен не найден или истёк"}), 400
+    if reset_tokens[phone_clean]["token"] != token:
+        return jsonify({"status": "error", "message": "Неверный токен"}), 400
+    if len(password) < 6:
+        return jsonify({"status": "error", "message": "Пароль должен быть не менее 6 символов"}), 400
     try:
-        supabase.table('users').update({'password_hash': hashlib.sha256(password.encode()).hexdigest()}).eq('email', email).execute()
-        del reset_tokens[email]
-        return jsonify({"status":"ok","message":"Пароль изменён"})
-    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        supabase.table('users').update({'password_hash': password_hash}).eq('phone', phone_clean).execute()
+        del reset_tokens[phone_clean]
+        return jsonify({"status": "ok", "message": "Пароль изменён"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # ========== ПОДДЕРЖКА ==========
 @app.route('/api/support', methods=['POST'])
 def support_message():
     data = request.json
     try:
-        supabase.table('support_messages').insert({'name':data.get('name',''),'email':data.get('email',''),'message':data.get('message',''),'status':'новое','created_at':datetime.now().isoformat()}).execute()
-        send_order_notification({"order_id":f"SUPPORT-{datetime.now().strftime('%H%M%S')}","product_name":f"Запрос от {data.get('name','—')}","price":0,"city":"Поддержка","postal":data.get('message',''),"comment":"","timestamp":datetime.now().strftime("%d.%m.%Y %H:%M")})
-        return jsonify({"status":"ok"}), 200
-    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
+        supabase.table('support_messages').insert({
+            'name': data.get('name', ''),
+            'email': data.get('email', ''),
+            'phone': data.get('phone', ''),
+            'message': data.get('message', ''),
+            'status': 'новое',
+            'created_at': datetime.now().isoformat()
+        }).execute()
+        send_order_notification({
+            "order_id": f"SUPPORT-{datetime.now().strftime('%H%M%S')}",
+            "product_name": f"Запрос от {data.get('name', '—')} ({data.get('phone', '—')})",
+            "price": 0,
+            "city": "Поддержка",
+            "postal": data.get('message', ''),
+            "comment": "",
+            "phone": data.get('phone', ''),
+            "timestamp": datetime.now().strftime("%d.%m.%Y %H:%M")
+        })
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/support', methods=['GET'])
 def get_support_messages():
-    try: return jsonify({"status":"ok","messages":supabase.table('support_messages').select('*').order('created_at', desc=True).execute().data}), 200
-    except Exception as e: return jsonify({"status":"error","message":str(e)}), 500
+    try:
+        return jsonify({"status": "ok", "messages": supabase.table('support_messages').select('*').order('created_at', desc=True).execute().data}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/admin/support')
 def admin_support():
     return f'''
     <!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Поддержка | Админ-панель</title>{ADMIN_CSS}</head>
     <body><div class="sidebar"><h2>🖥️ PC Shop</h2><a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a><a href="/admin/components">🔧 Комплектующие</a><a href="/admin/orders">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a><a href="/admin/support" class="active">💬 Поддержка</a><a href="/admin/chats">💬 Чаты</a><a href="#" onclick="logout()">🚪 Выйти</a></div>
-    <div class="content"><h1>💬 Запросы в поддержку</h1><div class="card"><table id="supportTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Сообщение</th><th>Статус</th><th>Дата</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="content"><h1>💬 Запросы в поддержку</h1><div class="card"><table id="supportTable"><thead><tr><th>ID</th><th>Имя</th><th>Телефон</th><th>Email</th><th>Сообщение</th><th>Статус</th><th>Дата</th></tr></thead><tbody></tbody></table></div></div>
     <script>
         async function loadMessages() {{
             const response = await fetch('/api/support'); const data = await response.json();
-            document.querySelector('#supportTable tbody').innerHTML = (data.messages||[]).map(m => `<tr><td>${{m.id}}</td><td><strong>${{m.name||'—'}}</strong></td><td>${{m.email||'—'}}</td><td>${{m.message||'—'}}</td><td><span class="badge badge-info">${{m.status||'новое'}}</span></td><td>${{new Date(m.created_at).toLocaleString('ru-RU')}}</td></tr>`).join('');
+            document.querySelector('#supportTable tbody').innerHTML = (data.messages||[]).map(m => `<tr><td>${{m.id}}</td><td><strong>${{m.name||'—'}}</strong></td><td>${{m.phone||'—'}}</td><td>${{m.email||'—'}}</td><td>${{m.message||'—'}}</td><td><span class="badge badge-info">${{m.status||'новое'}}</span></td><td>${{new Date(m.created_at).toLocaleString('ru-RU')}}</td></tr>`).join('');
         }}
         function logout(){{localStorage.removeItem('admin_token');window.location.href='/admin';}}
         loadMessages();
@@ -1286,17 +1468,18 @@ import uuid
 
 @app.route('/api/chat/start', methods=['POST'])
 def start_chat():
-    """Начинает новую сессию чата."""
     data = request.json
     session_id = str(uuid.uuid4())
     name = data.get('name', '')
     email = data.get('email', '')
+    phone = data.get('phone', '')
 
     try:
         supabase.table('chat_sessions').insert({
             'id': session_id,
             'name': name,
             'email': email,
+            'phone': phone,
             'status': 'active',
             'created_at': datetime.now().isoformat()
         }).execute()
@@ -1308,7 +1491,7 @@ def start_chat():
             'created_at': datetime.now().isoformat()
         }).execute()
 
-        logger.info(f"✅ Чат создан: {session_id} ({name}, {email})")
+        logger.info(f"✅ Чат создан: {session_id} ({name}, {phone})")
         return jsonify({"status": "ok", "session_id": session_id}), 200
     except Exception as e:
         logger.error(f"❌ Ошибка создания чата: {e}")
@@ -1316,7 +1499,6 @@ def start_chat():
 
 @app.route('/api/chat/message', methods=['POST'])
 def chat_message():
-    """Отправляет сообщение в чат (от пользователя или админа)."""
     data = request.json
     session_id = data.get('session_id', '')
     sender = data.get('sender', 'user')
@@ -1347,7 +1529,6 @@ def chat_message():
 
 @app.route('/api/chat/messages', methods=['GET'])
 def get_chat_messages():
-    """Получает сообщения чата по session_id."""
     session_id = request.args.get('session_id', '')
 
     if not session_id:
@@ -1368,7 +1549,6 @@ def get_chat_messages():
 
 @app.route('/api/chat/sessions', methods=['GET'])
 def get_chat_sessions():
-    """Получает все активные сессии чата."""
     try:
         response = supabase.table('chat_sessions')\
             .select('*')\
@@ -1387,7 +1567,7 @@ def admin_chats():
     return f'''
     <!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Чаты | Админ-панель</title>{ADMIN_CSS}</head>
     <body><div class="sidebar"><h2>🖥️ PC Shop</h2><a href="/admin/dashboard">📊 Дашборд</a><a href="/admin/products">📦 Товары</a><a href="/admin/components">🔧 Комплектующие</a><a href="/admin/orders">🛒 Заказы</a><a href="/admin/users">👥 Пользователи</a><a href="/admin/support">💬 Поддержка</a><a href="/admin/chats" class="active">💬 Чаты</a><a href="#" onclick="logout()">🚪 Выйти</a></div>
-    <div class="content"><h1>💬 Активные чаты</h1><button class="btn btn-primary" onclick="loadSessions()" style="margin-bottom:15px;">🔄 Обновить</button><div class="card"><table id="sessionsTable"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Дата</th><th>Действия</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="content"><h1>💬 Активные чаты</h1><button class="btn btn-primary" onclick="loadSessions()" style="margin-bottom:15px;">🔄 Обновить</button><div class="card"><table id="sessionsTable"><thead><tr><th>ID</th><th>Имя</th><th>Телефон</th><th>Email</th><th>Дата</th><th>Действия</th></tr></thead><tbody></tbody></table></div></div>
     <div class="modal" id="chatModal"><div class="modal-content" style="width:500px;"><h2>Чат с клиентом</h2><div id="chatMessagesBox" style="height:300px;overflow-y:auto;padding:10px;background:#f5f5f5;border-radius:8px;margin-bottom:15px;"></div><div style="display:flex;gap:10px;align-items:center;"><input type="text" id="adminChatInput" placeholder="Ваш ответ..." style="flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;"><button class="btn btn-primary" onclick="sendAdminMessage()" style="height:40px;">Отправить</button></div><button class="btn btn-danger" onclick="closeModal()" style="margin-top:10px;">Закрыть</button></div></div>
     <script>
         let currentSessionId = null, adminPollingInterval = null;
@@ -1396,15 +1576,15 @@ def admin_chats():
                 const response = await fetch('/api/chat/sessions'); const data = await response.json();
                 const tbody = document.querySelector('#sessionsTable tbody');
                 if (!data.sessions || data.sessions.length === 0) {{
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;">Нет активных чатов</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;">Нет активных чатов</td></tr>';
                 }} else {{
                     tbody.innerHTML = data.sessions.map(s => {{
                         const date = new Date(s.created_at);
-                        return `<tr><td>${{s.id.slice(0,8)}}...</td><td><strong>${{s.name||'—'}}</strong></td><td>${{s.email||'—'}}</td><td>${{date.toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="openChat('${{s.id}}','${{s.name}}')">💬</button></td></tr>`;
+                        return `<tr><td>${{s.id.slice(0,8)}}...</td><td><strong>${{s.name||'—'}}</strong></td><td>${{s.phone||'—'}}</td><td>${{s.email||'—'}}</td><td>${{date.toLocaleString('ru-RU')}}</td><td><button class="btn btn-info" onclick="openChat('${{s.id}}','${{s.name}}')">💬</button></td></tr>`;
                     }}).join('');
                 }}
             }} catch(e) {{
-                document.querySelector('#sessionsTable tbody').innerHTML = '<tr><td colspan="5" style="text-align:center;color:red;">Ошибка загрузки</td></tr>';
+                document.querySelector('#sessionsTable tbody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:red;">Ошибка загрузки</td></tr>';
             }}
         }}
         function openChat(sessionId, name) {{ currentSessionId = sessionId; document.getElementById('chatModal').style.display='flex'; document.getElementById('chatMessagesBox').innerHTML='<div style="text-align:center;color:#999;">Загрузка...</div>'; loadChatMessages(); startAdminPolling(); }}
@@ -1482,7 +1662,6 @@ def cleanup_old_chats():
 
 @app.route('/api/components', methods=['GET'])
 def get_components():
-    """Получает все комплектующие с возможностью фильтрации по типу."""
     comp_type = request.args.get('type', '')
     try:
         query = supabase.table('components').select('*').eq('is_active', True)
@@ -1496,7 +1675,6 @@ def get_components():
 
 @app.route('/api/components', methods=['POST'])
 def add_component():
-    """Добавляет новое комплектующее."""
     data = request.json
     try:
         response = supabase.table('components').insert({
@@ -1518,7 +1696,6 @@ def add_component():
 
 @app.route('/api/components/<uuid:component_id>', methods=['PUT'])
 def update_component(component_id):
-    """Обновляет комплектующее."""
     data = request.json
     try:
         updates = {}
@@ -1535,7 +1712,6 @@ def update_component(component_id):
 
 @app.route('/api/components/<uuid:component_id>', methods=['DELETE'])
 def delete_component(component_id):
-    """Мягкое удаление комплектующего."""
     try:
         supabase.table('components').update({'is_active': False}).eq('id', str(component_id)).execute()
         return jsonify({"status": "ok"})
@@ -1549,7 +1725,6 @@ def delete_component(component_id):
 
 @app.route('/api/compatibility', methods=['GET'])
 def get_compatibility():
-    """Получает все связи совместимости для компонента."""
     comp_type = request.args.get('type', '')
     comp_id = request.args.get('id', '')
     compatible_type = request.args.get('compatible_type', '')
@@ -1571,7 +1746,6 @@ def get_compatibility():
 
 @app.route('/api/compatibility', methods=['POST'])
 def add_compatibility():
-    """Добавляет связь совместимости между компонентами."""
     data = request.json
     try:
         response = supabase.table('compatibility_links').insert({
@@ -1587,68 +1761,11 @@ def add_compatibility():
 
 @app.route('/api/compatibility/<uuid:link_id>', methods=['DELETE'])
 def delete_compatibility(link_id):
-    """Удаляет связь совместимости."""
     try:
         supabase.table('compatibility_links').delete().eq('id', str(link_id)).execute()
         return jsonify({"status": "ok"})
     except Exception as e:
         logger.error(f"Ошибка удаления связи: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# ============================================================
-# API ДЛЯ ПЛАТЕЖЕЙ LAVA
-# ============================================================
-@app.route('/api/create-payment', methods=['POST'])
-def create_payment():
-    """Создаёт платёж через Lava.ru."""
-    data = request.json
-    LAVA_API_KEY = os.environ.get("LAVA_API_KEY", "")
-
-    if not LAVA_API_KEY:
-        return jsonify({"status": "error", "message": "Платежи временно недоступны"}), 503
-
-    try:
-        import requests as http_requests
-        import uuid
-
-        order_id = str(uuid.uuid4())
-        amount = float(data.get('amount', 0))
-        product_name = data.get('product_name', 'Заказ')
-
-        payload = {
-            "shop_id": LAVA_API_KEY,
-            "order_id": order_id,
-            "amount": amount,
-            "currency": "RUB",
-            "comment": product_name,
-            "fail_url": "https://pcggpro.ru/checkout.html?status=fail",
-            "success_url": "https://pcggpro.ru/checkout.html?status=success"
-        }
-
-        response = http_requests.post(
-            "https://api.lava.ru/business/merchant/invoice/create",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {LAVA_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            timeout=15
-        )
-
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("data", {}).get("url"):
-                return jsonify({
-                    "status": "ok",
-                    "payment_url": result["data"]["url"],
-                    "order_id": order_id
-                }), 200
-
-        logger.error(f"❌ Ошибка Lava: {response.status_code} - {response.text}")
-        return jsonify({"status": "error", "message": "Не удалось создать платёж"}), 500
-
-    except Exception as e:
-        logger.error(f"❌ Ошибка создания платежа: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # ========== ЗАПУСК ==========
